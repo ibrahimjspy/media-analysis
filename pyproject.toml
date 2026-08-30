@@ -41,7 +41,7 @@ media-analysis-vendor-models = "media_analysis.tools.vendor_models:main"
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.3,<9",
+  "pytest>=8.3,<10",
   "pytest-cov>=6.0,<7",
   "ruff>=0.8,<1",
 ]
