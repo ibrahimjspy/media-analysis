@@ -1,0 +1,54 @@
+name: Feature proposal
+description: Propose a focused capability or improvement
+title: "feat: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Large API, model, dependency, and licensing changes should be discussed
+        before implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or integration problem needs to be solved?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed contract
+      description: Describe inputs, outputs, errors, versioning, and image ownership.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What can callers do today, and why is that insufficient?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Validation plan
+      description: Describe fixtures, tests, benchmarks, and production gates.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Models, dependencies, and licenses
+      description: List new artifacts and their provenance or write "none".
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and the roadmap.
+          required: true
+        - label: This proposal keeps measurement separate from product editing decisions.
+          required: true

@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --constraint docker/constraints.txt -e ".[dev]"
+
+      - name: Ruff
+        run: ruff check src tests
+
+      - name: Verify opencv-python is not installed
+        run: |
+          if pip show opencv-python >/dev/null 2>&1; then
+            echo "opencv-python must not be installed; use opencv-python-headless only"
+            exit 1
+          fi
+
+      - name: Unit, end-to-end, and production contract tests
+        run: pytest -m "not real_models" --cov --cov-report=term-missing
+
+  docker-build-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build analysis-cpu image (linux/amd64)
+        run: docker build --platform linux/amd64 -f docker/analysis-cpu.Dockerfile -t media-analysis:analysis-cpu .
+
+      - name: Ready after boot with vendored weights
+        run: |
+          cid=$(docker run -d --platform linux/amd64 \
+            -e MEDIA_ANALYSIS_KEY=ci-smoke-key \
+            -e MEDIA_ANALYSIS_ALLOWED_HOSTS=127.0.0.1 \
+            -p 5001:5001 \
+            media-analysis:analysis-cpu)
+          trap "docker rm -f $cid" EXIT
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:5001/ready | python3 -c \
+              'import json, sys; body = json.load(sys.stdin); raise SystemExit(body.get("ready") is not True)'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "$cid"
+          exit 1
+
+  matte-reference-docker-build-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build matte-cpu reference image (linux/amd64)
+        run: docker build --platform linux/amd64 -f docker/matte-cpu.Dockerfile -t media-analysis:matte-cpu-reference .
+
+      - name: Ready only in explicit reference mode
+        run: |
+          cid=$(docker run -d --platform linux/amd64 \
+            -e MEDIA_ANALYSIS_KEY=ci-smoke-key \
+            -e MEDIA_ANALYSIS_ALLOWED_HOSTS=127.0.0.1 \
+            -p 5002:5001 \
+            media-analysis:matte-cpu-reference)
+          trap "docker rm -f $cid" EXIT
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:5002/ready | python3 -c \
+              'import json, sys; body = json.load(sys.stdin); raise SystemExit(not (body.get("ready") is True and body.get("referenceMode") is True and body.get("productionInferenceReady") is False))'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "$cid"
+          exit 1

@@ -1,0 +1,2 @@
+# Matte CPU image — same OpenCV headless pin as analysis-cpu.
+opencv-python-headless==4.10.0.84

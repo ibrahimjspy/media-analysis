@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/ibrahimjspy/media-analysis/security/advisories/new
+    about: Privately report vulnerabilities and accidental secret exposure
+  - name: Contribution guide
+    url: https://github.com/ibrahimjspy/media-analysis/blob/main/CONTRIBUTING.md
+    about: Read setup, testing, model, and pull request requirements

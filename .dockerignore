@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+.pytest_cache
+.ruff_cache
+.coverage
+__pycache__
+*.py[cod]
+canvases
+docs
+scripts
+tests
+models/*.onnx
+models/manifest.json
+.env

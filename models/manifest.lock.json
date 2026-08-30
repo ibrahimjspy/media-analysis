@@ -1,0 +1,105 @@
+{
+  "lockVersion": 2,
+  "profiles": {
+    "analysis-cpu": {
+      "gates": {
+        "ownedPpOcrExportRecorded": false,
+        "sileroVadProductionEnabled": true,
+        "note": "Checksum + runtime-compat tests do not substitute for owned PP-OCR export parity."
+      },
+      "models": [
+        {
+          "name": "yolox-tiny",
+          "file": "yolox_tiny.onnx",
+          "url": "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_tiny.onnx",
+          "revision": "YOLOX-0.1.1rc0",
+          "sha256": "427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7",
+          "license": "Apache-2.0",
+          "sizeBytes": 20219662,
+          "provenance": {
+            "artifactKind": "official-release",
+            "upstreamProject": "Megvii-BaseDetection/YOLOX",
+            "upstreamRevision": "0.1.1rc0"
+          }
+        },
+        {
+          "name": "yunet",
+          "file": "face_detection_yunet_2023mar.onnx",
+          "url": "https://media.githubusercontent.com/media/opencv/opencv_zoo/f12e12798e83/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+          "revision": "opencv_zoo-f12e12798e83/face_detection_yunet_2023mar",
+          "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+          "license": "MIT",
+          "sizeBytes": 232589,
+          "provenance": {
+            "artifactKind": "upstream-vendor",
+            "upstreamProject": "opencv/opencv_zoo",
+            "upstreamRevision": "f12e12798e83"
+          }
+        },
+        {
+          "name": "PP-OCRv5_mobile_det",
+          "file": "PP-OCRv5_mobile_det.onnx",
+          "url": "https://github.com/GreatV/oar-ocr/releases/download/v0.3.0/pp-ocrv5_mobile_det.onnx",
+          "revision": "community-oar-ocr-v0.3.0/pp-ocrv5_mobile_det",
+          "sha256": "1eb7b4f7ab657ebd1c66d5f79bca7497f29768a2e3c15e52daecbba1a8e4a039",
+          "license": "Apache-2.0",
+          "sizeBytes": 4826518,
+          "provenance": {
+            "artifactKind": "community-export",
+            "upstreamOfficialProject": "PaddlePaddle/PaddleOCR",
+            "upstreamOfficialModel": "PP-OCRv5 mobile text detection (det)",
+            "upstreamOfficialRevision": "PP-OCRv5",
+            "exporterProject": "GreatV/oar-ocr",
+            "exporterRevision": "v0.3.0",
+            "exportRecipe": "docs/ppocr-owned-export.md",
+            "ownedExportRecorded": false
+          }
+        },
+        {
+          "name": "silero-vad",
+          "file": "silero_vad.onnx",
+          "url": "https://raw.githubusercontent.com/snakers4/silero-vad/bfdc0193023f121ea5b3cc7b176dbed570a68a59/src/silero_vad/data/silero_vad.onnx",
+          "revision": "snakers4/silero-vad@bfdc0193023f121ea5b3cc7b176dbed570a68a59",
+          "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+          "license": "MIT",
+          "sizeBytes": 2327524,
+          "provenance": {
+            "artifactKind": "upstream-commit",
+            "upstreamOfficialProject": "snakers4/silero-vad",
+            "upstreamOfficialRevision": "bfdc0193023f121ea5b3cc7b176dbed570a68a59",
+            "upstreamLicense": "MIT",
+            "upstreamFile": "src/silero_vad/data/silero_vad.onnx"
+          }
+        }
+      ]
+    },
+    "matte-cpu": {
+      "gates": {
+        "matteProductionEnabled": false,
+        "benchmarkGatePassed": false,
+        "note": "No verified immutable official MODNet ONNX release exists. ZHKKKe/MODNet ships export script (onnx/export_onnx.py) only; community Google Drive ONNX is not pinned. Production gate remains off until an owned export is recorded with pinned SHA/revision/size."
+      },
+      "models": [
+        {
+          "name": "modnet",
+          "file": "modnet.onnx",
+          "url": "stub://local",
+          "revision": "stub-stage1-reference",
+          "sha256": "4d4a1e90e115a7cfe0f315ee09331f8d316af70727f37a37c52f7533cabf65af",
+          "license": "Apache-2.0",
+          "sizeBytes": 11,
+          "stub": true,
+          "provenance": {
+            "artifactKind": "blocked-no-immutable-onnx",
+            "upstreamOfficialProject": "ZHKKKe/MODNet",
+            "upstreamOfficialRevision": "master",
+            "upstreamLicense": "Apache-2.0",
+            "onnxExportScript": "https://github.com/ZHKKKe/MODNet/blob/master/onnx/export_onnx.py",
+            "communityOnnxNote": "Community ONNX linked from onnx/README.md (Google Drive) is not an immutable official release",
+            "productionBlocker": "No verified immutable official MODNet ONNX with pinned SHA, revision, and size"
+          }
+        }
+      ]
+    }
+  }
+}

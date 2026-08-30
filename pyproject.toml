@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "media-analysis"
+version = "1.2.0"
+description = "Open-source sidecar that measures short video, audio, composition, and mattes."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+authors = [{ name = "Muhammad Ibrahim" }]
+maintainers = [{ name = "Muhammad Ibrahim" }]
+keywords = ["video-analysis", "computer-vision", "fastapi", "onnx", "ffmpeg"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Framework :: FastAPI",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Video",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.32,<1",
+  "pydantic-settings>=2.6,<3",
+  "python-dotenv>=1.0,<2",
+  "httpx>=0.27,<1",
+  "numpy>=2.0,<3",
+  "opencv-python-headless>=4.10,<4.11",
+  "scenedetect>=0.6.7.1,<0.7",
+  "onnxruntime>=1.19,<2",
+  "pyclipper>=1.3,<2",
+]
+
+[project.scripts]
+media-analysis-vendor-models = "media_analysis.tools.vendor_models:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-cov>=6.0,<7",
+  "ruff>=0.8,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/ibrahimjspy/media-analysis"
+Documentation = "https://github.com/ibrahimjspy/media-analysis#readme"
+Repository = "https://github.com/ibrahimjspy/media-analysis"
+Issues = "https://github.com/ibrahimjspy/media-analysis/issues"
+Changelog = "https://github.com/ibrahimjspy/media-analysis/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+addopts = "-q --strict-markers -m 'not real_models'"
+markers = [
+  "unit: isolated contract and helper tests",
+  "e2e: HTTP + filesystem + ffmpeg behavior",
+  "ffmpeg: requires ffmpeg/ffprobe on PATH",
+  "production: deployment, lock, and Docker contract tests",
+  "real_models: downloads real ONNX weights (opt-in, not CI default)",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.coverage.run]
+source = ["media_analysis"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true

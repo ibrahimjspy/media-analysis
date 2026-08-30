@@ -1,0 +1,78 @@
+media-analysis
+Copyright 2026 media-analysis contributors
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file in the project root.
+
+This product vendors or depends on third-party works. Their licenses
+remain those of their authors. A Docker image that includes FFmpeg built
+with libx264 is a GPL-enabled FFmpeg binary; that does not relicense
+this repository's Python source. Redistributors of that binary must
+satisfy FFmpeg / x264 source-offer obligations.
+
+Third-party components (planned / vendored):
+
+  YOLOX
+  Copyright Megvii Inc.
+  Apache License 2.0
+  https://github.com/Megvii-BaseDetection/YOLOX
+
+  ByteTrack
+  Copyright FoundationVision / ByteTrack authors
+  MIT License
+  https://github.com/FoundationVision/ByteTrack
+
+  OpenCV
+  Copyright OpenCV Foundation and contributors
+  Apache License 2.0
+  https://opencv.org/license/
+
+  YuNet face detection model (OpenCV Zoo)
+  MIT License
+  https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet
+
+  PaddleOCR / PP-OCRv5 mobile detection
+  Copyright PaddlePaddle authors
+  Apache License 2.0
+  https://github.com/PaddlePaddle/PaddleOCR
+
+  GreatV/oar-ocr PP-OCRv5 ONNX export (interim artifact)
+  Apache License 2.0
+  https://github.com/GreatV/oar-ocr
+
+  PySceneDetect
+  BSD 3-Clause License
+  https://github.com/Breakthrough/PySceneDetect
+
+  ONNX Runtime
+  Copyright Microsoft Corporation
+  MIT License
+  https://github.com/microsoft/onnxruntime
+
+  FastAPI / Starlette / Uvicorn / Pydantic
+  MIT License
+
+  FFmpeg
+  LGPL 2.1+ by default; GPL 2+ when configured with --enable-gpl / libx264
+  https://ffmpeg.org/legal.html
+
+  x264 (when present in the FFmpeg build)
+  GPL
+  https://www.videolan.org/developers/x264.html
+
+  librosa (optional BPM runtime enhancement)
+  ISC License
+  https://github.com/librosa/librosa
+
+  Silero VAD
+  MIT License
+  https://github.com/snakers4/silero-vad
+
+  MODNet (matte worker, v2)
+  Apache License 2.0
+  https://github.com/ZHKKKe/MODNet
+
+Robust Video Matting (RVM) is a quality-reference model under GPL-3.0.
+It is not vendored in this repository unless a documented legal approval
+is added. Do not add Ultralytics YOLO weights or code: those are AGPL-3.0
+and are incompatible with this project's Apache-2.0 default.

@@ -1,0 +1,34 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+.env
+.env.*
+!.env.example
+
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Vendored weights are downloaded at setup/build and checksummed.
+# Do not commit raw ONNX/binaries unless a release explicitly vendors them.
+models/**
+!models/manifest.json
+!models/manifest.lock.json
+!models/README.md
+
+*.mp4
+*.mov
+*.mkv
+*.wav
+dist/
+build/
+*.egg-info/
