@@ -1,20 +1,25 @@
-# media-analysis
+<p align="center">
+  <img src="public/logo.png" alt="media-analysis logo" width="180">
+</p>
 
-[![CI](https://github.com/ibrahimjspy/media-analysis/actions/workflows/ci.yml/badge.svg)](https://github.com/ibrahimjspy/media-analysis/actions/workflows/ci.yml)
-[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+<h1 align="center">media-analysis</h1>
 
-Open-source Python sidecar that **measures** short video. It does not edit, caption, or publish assets.
+<p align="center">
+  Open-source Python sidecar that <strong>measures</strong> short video.<br>
+  Subjects, faces, OCR regions, shots, motion, quality, audio, exposure, thumbnails, and mattes.
+</p>
+
+<p align="center">
+  <a href="https://github.com/ibrahimjspy/media-analysis/actions/workflows/ci.yml"><img src="https://github.com/ibrahimjspy/media-analysis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.python.org/downloads/release/python-3120/"><img src="https://img.shields.io/badge/python-3.12-blue.svg" alt="Python 3.12"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+</p>
+
+It does not edit, caption, or publish assets.
 
 Callers send a short-lived signed GET for the source, request a subset of features, and receive JSON plus checksums. If bytes must leave the process (canonical MP4, thumbnail JPEG, person-matte MP4), the caller issues a key-specific signed PUT and this service uploads once. The caller owns public IDs, cache, and the authoritative matte manifest.
 
-```text
-caller  --signed GET source-->  media-analysis
-        <--JSON + sha256 + bytes-->
-        --scoped signed PUT-->
-        Python uploads candidate
-        caller verifies, owns, publishes
-```
+![media-analysis request and artifact flow](public/visual.png)
 
 This service only measures. Downstream products decide what to keep, trim, or place.
 
