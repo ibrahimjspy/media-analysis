@@ -108,6 +108,8 @@ def stream_matte_mp4(
         "-i",
         "pipe:0",
         "-an",
+        "-vf",
+        "scale=in_range=full:out_range=full",
         "-c:v",
         "libx264",
         "-pix_fmt",
