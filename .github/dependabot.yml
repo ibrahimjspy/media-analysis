@@ -15,6 +15,15 @@ updates:
       - dependency-name: "*"
         update-types:
           - version-update:semver-major
+      - dependency-name: scenedetect
+        versions:
+          - ">=0.7"
+      - dependency-name: pytest
+        versions:
+          - ">=9"
+      - dependency-name: pytest-cov
+        versions:
+          - ">=7"
 
   - package-ecosystem: github-actions
     directory: /
