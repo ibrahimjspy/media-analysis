@@ -44,6 +44,13 @@ thumbnail indices, or matte labels. Optional `priorFacts` can provide canonical
 shots and subject tracks for fill-only analysis. Consult `/openapi.json` for
 the complete generated input schema.
 
+When `canonicalize` is `true` and `outputGrants.canonicalMp4` is present, the
+worker uploads the measured CFR MP4 before returning. The returned
+`canonicalMedia` then includes the uploaded artifact's `sha256` and
+`byteCount`. The orchestrator must verify those values before publishing a
+derived asset ID. If no canonical grant is supplied, canonicalization remains
+process-local for measurement compatibility.
+
 The same `idempotencyKey` and logical request return the cached result within a
 worker. Reusing the key with different logical content returns
 `INVALID_REQUEST`. Signed URLs and expiration timestamps are excluded from the

@@ -323,7 +323,7 @@ def run_analyze(
                     "analysisResolution must preserve canonical aspect ratio",
                 )
         _check_job(job, deadline)
-        return _compute(
+        result = _compute(
             request,
             media,
             work,
@@ -333,6 +333,27 @@ def run_analyze(
             deadline,
             work_dir=Path(tmp),
         )
+        if (
+            request.canonicalize
+            and request.outputGrants is not None
+            and request.outputGrants.canonicalMp4 is not None
+        ):
+            _check_job(job, deadline)
+            grant = request.outputGrants.canonicalMp4
+            artifact = upload_artifact(
+                work.read_bytes(),
+                grant.signedPutUrl,
+                settings=settings,
+                expires_at=grant.expiresAt,
+                mime_type="video/mp4",
+                timeout_sec=min(
+                    settings.media_analysis_download_timeout_sec,
+                    _remaining(deadline),
+                ),
+                cancel_check=lambda: _check_job(job, deadline),
+            )
+            result["canonicalMedia"].update(artifact)
+        return result
 
 
 def _compute(

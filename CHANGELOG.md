@@ -6,6 +6,11 @@ All notable changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- Canonical CFR MP4 delivery through `outputGrants.canonicalMp4`, including
+  response `sha256` and `byteCount` for orchestrator verification.
+
 ### Planned
 
 - Owned PP-OCR export and parity validation.

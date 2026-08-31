@@ -57,6 +57,44 @@ def _shot(start: int, end: int) -> dict:
 
 @pytest.mark.e2e
 @pytest.mark.ffmpeg
+def test_canonicalize_uploads_delivery_mp4_when_grant_is_provided(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    source_server: dict,
+    put_server: dict,
+    future_expiry: str,
+) -> None:
+    response = client.post(
+        "/analyze",
+        headers=auth_headers,
+        json={
+            "idempotencyKey": "canonical-delivery-upload",
+            "canonicalize": True,
+            "source": {
+                "signedGetUrl": source_server["url"],
+                "expiresAt": future_expiry,
+            },
+            "features": ["shots"],
+            "outputGrants": {
+                "canonicalMp4": {
+                    "signedPutUrl": put_server["url"],
+                    "expiresAt": future_expiry,
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(put_server["uploads"]) == 1
+    _, uploaded, content_type = put_server["uploads"][0]
+    assert content_type == "video/mp4"
+    assert body["canonicalMedia"]["byteCount"] == len(uploaded)
+    assert body["canonicalMedia"]["sha256"] == hashlib.sha256(uploaded).hexdigest()
+
+
+@pytest.mark.e2e
+@pytest.mark.ffmpeg
 def test_combined_v11_v12_features_complete(
     client: TestClient,
     auth_headers: dict[str, str],
