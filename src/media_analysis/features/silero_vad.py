@@ -13,8 +13,9 @@ import numpy as np
 SILERO_VAD_MODEL_FILENAME = "silero_vad.onnx"
 SILERO_VAD_MODEL_VERSION = "6.2"
 SILERO_VAD_CAPABILITY_VERSION = "silero-vad-onnx-6.2-provisional"
-SILERO_VAD_PREPROCESSING_VERSION = "silero-chunk512-mono16k-v6"
+SILERO_VAD_PREPROCESSING_VERSION = "silero-chunk512-context64-mono16k-v6"
 SILERO_VAD_WINDOW_SAMPLES = 512
+SILERO_VAD_CONTEXT_SAMPLES = 64
 SILERO_VAD_SAMPLE_RATE = 16_000
 SILERO_VAD_STATE_SHAPE = (2, 1, 128)
 
@@ -109,7 +110,10 @@ def load_silero_vad_session(model_path: Path) -> Any:
 
 def warmup_silero_vad(session: SileroVadSessionLike) -> None:
     """Deterministic warmup compatible with runtime /ready checks."""
-    zeros = np.zeros(SILERO_VAD_WINDOW_SAMPLES, dtype=np.float32)
+    zeros = np.zeros(
+        SILERO_VAD_CONTEXT_SAMPLES + SILERO_VAD_WINDOW_SAMPLES,
+        dtype=np.float32,
+    )
     _run_vad_chunk(session, zeros, sample_rate=SILERO_VAD_SAMPLE_RATE, state=None)
 
 
@@ -134,17 +138,20 @@ def score_vad_windows(
         (0, count * window_samples - samples.size),
     )
     state = np.zeros(SILERO_VAD_STATE_SHAPE, dtype=np.float32)
+    context = np.zeros(SILERO_VAD_CONTEXT_SAMPLES, dtype=np.float32)
     scores: list[VadWindowScore] = []
     for index in range(0, count * window_samples, window_samples):
         if cancel_check:
             cancel_check()
         chunk = padded[index : index + window_samples]
+        model_input = np.concatenate((context, chunk))
         prob, state = _run_vad_chunk(
             session,
-            chunk,
+            model_input,
             sample_rate=sample_rate,
             state=state,
         )
+        context = chunk[-SILERO_VAD_CONTEXT_SAMPLES :].copy()
         start = index / sample_rate
         end = min(start + window_sec, duration_sec)
         scores.append(

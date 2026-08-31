@@ -21,8 +21,8 @@ from media_analysis.features.yunet import (
 )
 from media_analysis.frames import Rational, presentation_time_sec
 
-FACE_TRACKER_VERSION = "iou-shot-reset-1.0.0"
-FACE_ASSOCIATION_VERSION = "containment-iou-time-1.0.0"
+FACE_TRACKER_VERSION = "iou-shot-reset-1.1.0"
+FACE_ASSOCIATION_VERSION = "subject-evidence-containment-iou-time-1.1.0"
 MAX_SAMPLE_GAP_MS = 200.0
 MAX_TRACK_MISSED_SAMPLES = 1
 
@@ -30,7 +30,9 @@ IOU_MATCH_THRESHOLD = 0.3
 CONTAINMENT_THRESHOLD = 0.85
 SUBJECT_IOU_THRESHOLD = 0.25
 MIN_ASSOCIATION_FRAME_RATIO = 0.5
-MIN_ASSOCIATION_FRAMES = 2
+MIN_ASSOCIATION_FRAMES = 1
+UNSUPPORTED_FACE_MIN_SCORE = 0.9
+UNSUPPORTED_FACE_MIN_DETECTIONS = 2
 UNIFORM_SCALE_TOLERANCE = 1e-6
 
 
@@ -150,8 +152,9 @@ def analyze_faces(
             )
             tracks.extend(shot_tracks)
 
-        if subjects:
+        if subjects is not None:
             _associate_subjects(tracks, subjects)
+            tracks = _filter_and_merge_subject_faces(tracks)
         return tracks
     finally:
         if owns_reader and isinstance(reader, VideoFrameReader):
@@ -458,6 +461,59 @@ def _associate_subjects(faces: list[dict[str, Any]], subjects: list[dict[str, An
         subject_id = _pick_subject_track(face, subjects)
         if subject_id is not None:
             face["subjectTrackId"] = subject_id
+
+
+def _filter_and_merge_subject_faces(faces: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep supported faces and collapse fragments for the same person track."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    unsupported: list[dict[str, Any]] = []
+    for face in faces:
+        subject_id = face.get("subjectTrackId")
+        if subject_id is None:
+            detected = [
+                sample
+                for sample in face.get("samples", [])
+                if sample.get("sampleKind") == "detected"
+            ]
+            if (
+                float(face.get("aggregateScore") or 0.0) >= UNSUPPORTED_FACE_MIN_SCORE
+                and len(detected) >= UNSUPPORTED_FACE_MIN_DETECTIONS
+            ):
+                unsupported.append(face)
+            continue
+        grouped.setdefault(subject_id, []).append(face)
+
+    merged: list[dict[str, Any]] = []
+    for subject_id, fragments in grouped.items():
+        samples_by_frame: dict[int, dict[str, Any]] = {}
+        for fragment in fragments:
+            for sample in fragment.get("samples", []):
+                frame = int(sample["sourceFrame"])
+                current = samples_by_frame.get(frame)
+                if current is None or _sample_preference(sample) > _sample_preference(current):
+                    samples_by_frame[frame] = sample
+
+        samples = [samples_by_frame[frame] for frame in sorted(samples_by_frame)]
+        scores = [
+            float(sample["detectorScore"])
+            for sample in samples
+            if sample.get("detectorScore") is not None
+        ]
+        merged.append(
+            {
+                "trackId": fragments[0]["trackId"],
+                "aggregateScore": sum(scores) / len(scores) if scores else None,
+                "scoreType": "raw_model",
+                "subjectTrackId": subject_id,
+                "samples": samples,
+            }
+        )
+    return merged + unsupported
+
+
+def _sample_preference(sample: dict[str, Any]) -> tuple[int, float]:
+    is_detected = int(sample.get("sampleKind") == "detected")
+    return is_detected, float(sample.get("detectorScore") or 0.0)
 
 
 def _pick_subject_track(face: dict[str, Any], subjects: list[dict[str, Any]]) -> str | None:

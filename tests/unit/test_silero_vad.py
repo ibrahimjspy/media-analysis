@@ -7,6 +7,7 @@ from media_analysis.errors import CANCELLED, AnalyzeError
 from media_analysis.features.silero_vad import (
     DEFAULT_SPEECH_THRESHOLD,
     SILERO_VAD_CAPABILITY_VERSION,
+    SILERO_VAD_CONTEXT_SAMPLES,
     SILERO_VAD_MODEL_FILENAME,
     SILERO_VAD_MODEL_VERSION,
     SILERO_VAD_STATE_SHAPE,
@@ -25,6 +26,7 @@ def test_silero_model_expectations_for_v6_2() -> None:
     assert SILERO_VAD_MODEL_FILENAME == "silero_vad.onnx"
     assert SILERO_VAD_MODEL_VERSION == "6.2"
     assert SILERO_VAD_CAPABILITY_VERSION == "silero-vad-onnx-6.2-provisional"
+    assert SILERO_VAD_CONTEXT_SAMPLES == 64
     assert SILERO_VAD_STATE_SHAPE == (2, 1, 128)
 
 
@@ -40,7 +42,7 @@ def test_fake_silero_v6_warmup_runs_single_chunk() -> None:
     session = FakeSileroVadV6Session(constant=0.2)
     warmup_silero_vad(session)
     assert len(session.calls) == 1
-    assert session.calls[0].shape == (512,)
+    assert session.calls[0].shape == (576,)
 
 
 @pytest.mark.unit
@@ -63,6 +65,22 @@ def test_score_vad_windows_uses_injected_probabilities() -> None:
     windows = score_vad_windows(session, samples)
     assert len(windows) == 3
     assert windows[1].score == pytest.approx(0.9)
+
+
+@pytest.mark.unit
+def test_score_vad_windows_prepends_rolling_context() -> None:
+    session = FakeSileroVadV6Session(constant=0.1)
+    first = np.full(512, 0.1, dtype=np.float32)
+    second = np.full(512, 0.2, dtype=np.float32)
+
+    score_vad_windows(session, np.concatenate((first, second)))
+
+    assert len(session.calls) == 2
+    assert session.calls[0].shape == (576,)
+    assert np.all(session.calls[0][:64] == 0.0)
+    np.testing.assert_allclose(session.calls[0][64:], first)
+    np.testing.assert_allclose(session.calls[1][:64], first[-64:])
+    np.testing.assert_allclose(session.calls[1][64:], second)
 
 
 @pytest.mark.unit

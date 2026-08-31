@@ -30,6 +30,24 @@ EBUR128_SILENT_STDERR = """
     Peak:         -inf dBFS
 """
 
+EBUR128_STARTUP_AND_FINAL_STDERR = """
+[Parsed_ebur128_0 @ 0x600003d14000] Summary:
+
+  Integrated loudness:
+    I:         -70.0 LUFS
+
+  True peak:
+    Peak:         -inf dBFS
+
+[Parsed_ebur128_0 @ 0x600003d14000] Summary:
+
+  Integrated loudness:
+    I:         -18.4 LUFS
+
+  True peak:
+    Peak:        -2.1 dBFS
+"""
+
 
 @pytest.mark.unit
 def test_parse_ebur128_realistic_multiline_output() -> None:
@@ -43,6 +61,13 @@ def test_parse_ebur128_negative_infinity_maps_to_null() -> None:
     result = parse_ebur128_output(EBUR128_SILENT_STDERR)
     assert result.integrated_lufs is None
     assert result.true_peak_db is None
+
+
+@pytest.mark.unit
+def test_parse_ebur128_uses_final_summary_not_startup_defaults() -> None:
+    result = parse_ebur128_output(EBUR128_STARTUP_AND_FINAL_STDERR)
+    assert result.integrated_lufs == pytest.approx(-18.4)
+    assert result.true_peak_db == pytest.approx(-2.1)
 
 
 @pytest.mark.unit

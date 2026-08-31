@@ -452,11 +452,21 @@ def _compute(
             else:
                 if internal_shots is None or runtime.face_detector is None:
                     raise RuntimeError("face dependencies are unavailable")
+                face_subjects = body.get("subjects")
+                if (
+                    face_subjects is None
+                    and request.priorFacts
+                    and request.priorFacts.subjects is not None
+                ):
+                    face_subjects = [
+                        item.model_dump(by_alias=True)
+                        for item in request.priorFacts.subjects
+                    ]
                 faces = analyze_faces(
                     path,
                     media,
                     shots=internal_shots,
-                    subjects=body.get("subjects"),
+                    subjects=face_subjects,
                     analysis_width=(
                         request.analysisResolution.width
                         if request.analysisResolution
@@ -770,7 +780,9 @@ def _compute(
             provenance["subjectModel"] = subject_model_provenance(entry)
     if "faces" in requested_set:
         provenance["faceTrackerVersion"] = FACE_TRACKER_VERSION
-        if "subjects" in requested_set:
+        if "subjects" in requested_set or (
+            request.priorFacts and request.priorFacts.subjects is not None
+        ):
             provenance["faceAssociationVersion"] = FACE_ASSOCIATION_VERSION
         entry = manifest.by_name("yunet")
         if entry:

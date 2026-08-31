@@ -81,7 +81,7 @@ def test_face_associates_to_containing_subject_track() -> None:
 
 
 @pytest.mark.unit
-def test_face_without_subject_overlap_has_no_subject_track_id() -> None:
+def test_face_without_subject_overlap_is_filtered_when_subjects_ran() -> None:
     shots = [{"startFrame": 0, "endFrameExclusive": 6}]
     reader = DictFrameReader(
         frames={
@@ -89,9 +89,46 @@ def test_face_without_subject_overlap_has_no_subject_track_id() -> None:
             5: np.zeros((240, 320, 3), dtype=np.uint8),
         }
     )
-    face_box = RawFaceDetection(x=10, y=10, width=20, height=20, score=0.93)
+    face_box = RawFaceDetection(x=10, y=10, width=20, height=20, score=0.75)
     detector = FakeYuNetDetector(sequence=[[face_box], [face_box]])
 
+    subjects = [
+        _subject(
+            "person-000-002",
+            0,
+            {"x": 0.7, "y": 0.7, "width": 0.2, "height": 0.2},
+        ),
+        _subject(
+            "person-000-002",
+            5,
+            {"x": 0.7, "y": 0.7, "width": 0.2, "height": 0.2},
+        ),
+    ]
+
+    faces = analyze_faces(
+        path=__file__,
+        media=_media(),
+        shots=shots,
+        subjects=subjects,
+        detector=detector,
+        frame_reader=reader,
+        max_sample_gap_ms=200,
+    )
+
+    assert faces == []
+
+
+@pytest.mark.unit
+def test_persistent_high_confidence_face_survives_without_subject_overlap() -> None:
+    shots = [{"startFrame": 0, "endFrameExclusive": 6}]
+    reader = DictFrameReader(
+        frames={
+            0: np.zeros((240, 320, 3), dtype=np.uint8),
+            5: np.zeros((240, 320, 3), dtype=np.uint8),
+        }
+    )
+    face_box = RawFaceDetection(x=10, y=10, width=20, height=20, score=0.95)
+    detector = FakeYuNetDetector(sequence=[[face_box], [face_box]])
     subjects = [
         _subject(
             "person-000-002",
@@ -120,6 +157,64 @@ def test_face_without_subject_overlap_has_no_subject_track_id() -> None:
 
 
 @pytest.mark.unit
+def test_face_without_subject_context_remains_available() -> None:
+    shots = [{"startFrame": 0, "endFrameExclusive": 6}]
+    reader = DictFrameReader(
+        frames={
+            0: np.zeros((240, 320, 3), dtype=np.uint8),
+            5: np.zeros((240, 320, 3), dtype=np.uint8),
+        }
+    )
+    face_box = RawFaceDetection(x=10, y=10, width=20, height=20, score=0.93)
+    detector = FakeYuNetDetector(sequence=[[face_box], [face_box]])
+
+    faces = analyze_faces(
+        path=__file__,
+        media=_media(),
+        shots=shots,
+        detector=detector,
+        frame_reader=reader,
+        max_sample_gap_ms=200,
+    )
+
+    assert len(faces) == 1
+    assert "subjectTrackId" not in faces[0]
+
+
+@pytest.mark.unit
+def test_face_fragments_for_same_subject_merge_into_one_track() -> None:
+    shots = [{"startFrame": 0, "endFrameExclusive": 12}]
+    reader = DictFrameReader(
+        frames={
+            0: np.zeros((240, 320, 3), dtype=np.uint8),
+            6: np.zeros((240, 320, 3), dtype=np.uint8),
+            11: np.zeros((240, 320, 3), dtype=np.uint8),
+        }
+    )
+    first = RawFaceDetection(x=40, y=40, width=30, height=40, score=0.91)
+    shifted = RawFaceDetection(x=160, y=40, width=30, height=40, score=0.92)
+    detector = FakeYuNetDetector(sequence=[[first], [shifted], []])
+    subjects = [
+        _subject("person-000-001", 0, {"x": 0.05, "y": 0.05, "width": 0.4, "height": 0.8}),
+        _subject("person-000-001", 6, {"x": 0.4, "y": 0.05, "width": 0.5, "height": 0.8}),
+    ]
+
+    faces = analyze_faces(
+        path=__file__,
+        media=_media(frame_count=12),
+        shots=shots,
+        subjects=subjects,
+        detector=detector,
+        frame_reader=reader,
+        max_sample_gap_ms=200,
+    )
+
+    assert len(faces) == 1
+    assert faces[0]["subjectTrackId"] == "person-000-001"
+    assert [sample["sourceFrame"] for sample in faces[0]["samples"]] == [0, 6]
+
+
+@pytest.mark.unit
 def test_subject_association_requires_temporal_overlap() -> None:
     shots = [{"startFrame": 0, "endFrameExclusive": 12}]
     reader = DictFrameReader(
@@ -129,7 +224,7 @@ def test_subject_association_requires_temporal_overlap() -> None:
             11: np.zeros((240, 320, 3), dtype=np.uint8),
         }
     )
-    face_box = RawFaceDetection(x=80, y=60, width=40, height=40, score=0.93)
+    face_box = RawFaceDetection(x=80, y=60, width=40, height=40, score=0.75)
     detector = FakeYuNetDetector(sequence=[[face_box], [face_box], [face_box]])
 
     subjects = [
@@ -146,8 +241,7 @@ def test_subject_association_requires_temporal_overlap() -> None:
         max_sample_gap_ms=200,
     )
 
-    assert len(faces) == 1
-    assert "subjectTrackId" not in faces[0]
+    assert faces == []
 
 
 @pytest.mark.unit

@@ -31,7 +31,7 @@ from media_analysis.features.silero_vad import (
 from media_analysis.frames import Rational
 from media_analysis.models_manifest import ModelEntry
 
-AUDIO_ANALYZER_VERSION = "audio-v1.1.0-provisional"
+AUDIO_ANALYZER_VERSION = "audio-v1.1.1-provisional"
 VAD_POLICY_VERSION = "silero-merge-threshold0.5-1.0.0-provisional"
 AUDIO_ABSENT_WARNING = "AUDIO_ABSENT"
 

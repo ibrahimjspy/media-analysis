@@ -11,6 +11,14 @@ All notable changes are documented here. This project follows
 - Canonical CFR MP4 delivery through `outputGrants.canonicalMp4`, including
   response `sha256` and `byteCount` for orchestrator verification.
 
+### Fixed
+
+- Filter weak YuNet false positives against requested subject evidence and
+  consolidate face fragments associated with the same subject track.
+- Parse the final FFmpeg `ebur128` summary instead of its silent startup values.
+- Prepend Silero VAD's required rolling 64-sample context to each inference
+  window.
+
 ### Planned
 
 - Owned PP-OCR export and parity validation.

@@ -31,7 +31,7 @@ BPM_MIN_SIGNAL_SEC = 2.0
 BPM_MIN_CONFIDENCE = 0.45
 BPM_MIN_FLUX_VARIANCE = 1e-4
 
-LOUDNESS_POLICY_VERSION = "ffmpeg-ebur128-peak-1.0.0-provisional"
+LOUDNESS_POLICY_VERSION = "ffmpeg-ebur128-peak-1.0.1-provisional"
 
 BAND_EDGES_HZ = {
     "low": (20.0, 200.0),
@@ -323,55 +323,42 @@ def _estimate_bpm_librosa(samples: np.ndarray, sample_rate: int) -> float | None
 
 
 def _parse_integrated_lufs(text: str) -> float | None:
-    match = re.search(
+    patterns = (
         r"Integrated loudness:\s*\n\s*I:\s*(-inf|-?\d+(?:\.\d+)?)\s*LUFS",
-        text,
-        flags=re.IGNORECASE,
+        r"Integrated loudness:\s*(-inf|-?\d+(?:\.\d+)?)\s*LUFS",
+        r"Integrated loudness \(I\):\s*(-inf|-?\d+(?:\.\d+)?)\s*LUFS",
     )
-    if not match:
-        match = re.search(
-            r"Integrated loudness:\s*(-inf|-?\d+(?:\.\d+)?)\s*LUFS",
-            text,
-            flags=re.IGNORECASE,
-        )
-    if not match:
-        match = re.search(
-            r"Integrated loudness \(I\):\s*(-inf|-?\d+(?:\.\d+)?)\s*LUFS",
-            text,
-            flags=re.IGNORECASE,
-        )
-    if not match:
+    raw = _last_metric_value(text, patterns)
+    if raw is None:
         return None
-    raw = match.group(1).lower()
     if raw == "-inf":
         return None
     return float(raw)
 
 
 def _parse_true_peak_db(text: str) -> float | None:
-    match = re.search(
+    patterns = (
         r"True peak:\s*\n\s*Peak:\s*(-inf|-?\d+(?:\.\d+)?)\s*dBFS",
-        text,
-        flags=re.IGNORECASE,
+        r"True peak:\s*(-inf|-?\d+(?:\.\d+)?)\s*dBFS",
+        r"Peak:\s*(-inf|-?\d+(?:\.\d+)?)\s*dBFS",
     )
-    if not match:
-        match = re.search(
-            r"True peak:\s*(-inf|-?\d+(?:\.\d+)?)\s*dBFS",
-            text,
-            flags=re.IGNORECASE,
-        )
-    if not match:
-        match = re.search(
-            r"Peak:\s*(-inf|-?\d+(?:\.\d+)?)\s*dBFS",
-            text,
-            flags=re.IGNORECASE,
-        )
-    if not match:
+    raw = _last_metric_value(text, patterns)
+    if raw is None:
         return None
-    raw = match.group(1).lower()
     if raw == "-inf":
         return None
     return float(raw)
+
+
+def _last_metric_value(text: str, patterns: tuple[str, ...]) -> str | None:
+    matches = [
+        (match.start(), match.group(1).lower())
+        for pattern in patterns
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE)
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda item: item[0])[1]
 
 
 def parse_ebur128_output(text: str) -> LoudnessMeasurement:
