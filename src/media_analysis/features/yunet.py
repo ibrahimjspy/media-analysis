@@ -11,9 +11,9 @@ import numpy as np
 
 YUNET_MODEL_FILENAME = "face_detection_yunet_2023mar.onnx"
 YUNET_CAPABILITY_VERSION = "yunet-2023mar-policy1.1.0"
-YUNET_PREPROCESSING_VERSION = "yunet-native-resolution-score0.70"
+YUNET_PREPROCESSING_VERSION = "yunet-native-resolution-score0.60"
 
-DEFAULT_SCORE_THRESHOLD = 0.7
+DEFAULT_SCORE_THRESHOLD = 0.6
 DEFAULT_NMS_THRESHOLD = 0.3
 DEFAULT_TOP_K = 5000
 DEFAULT_INPUT_SIZE = (320, 320)

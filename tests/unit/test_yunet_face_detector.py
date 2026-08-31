@@ -114,4 +114,4 @@ def test_clip_normalized_box_shrinks_partially_out_of_frame_positive_overflow() 
 
 @pytest.mark.unit
 def test_default_score_threshold_is_documented() -> None:
-    assert DEFAULT_SCORE_THRESHOLD == 0.7
+    assert DEFAULT_SCORE_THRESHOLD == 0.6
