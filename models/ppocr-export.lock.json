@@ -1,0 +1,30 @@
+{
+  "exportVersion": 1,
+  "upstreamInference": {
+    "name": "PP-OCRv5_mobile_det_infer.tar",
+    "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_mobile_det_infer.tar",
+    "sha256": "50446e5d01ac2a73d5319c89513281f6578414c888c602f9af13f93feefffc58",
+    "sizeBytes": 4935680,
+    "license": "Apache-2.0",
+    "project": "PaddlePaddle/PaddleX",
+    "revision": "paddle3.0.0/PP-OCRv5_mobile_det_infer"
+  },
+  "toolchain": {
+    "python": "3.12",
+    "paddlepaddle": "3.1.1",
+    "paddle2onnx": "2.1.0",
+    "opset": 11,
+    "platform": "linux/amd64"
+  },
+  "parity": {
+    "maxAbsProb": 0.001,
+    "minBoxIou": 0.9,
+    "policyVersion": "ocr-parity-paddle-onnx-1.0.0"
+  },
+  "recall": {
+    "iou": 0.5,
+    "minRecall": 0.8,
+    "minPrecision": 0.5,
+    "policyVersion": "ocr-recall-synthetic-1.0.0"
+  }
+}

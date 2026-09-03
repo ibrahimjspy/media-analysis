@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from media_analysis import __version__
+from media_analysis.build_provenance import analyze_build_provenance
 from media_analysis.config import IMPLEMENTED_CPU, MATTE_FEATURES, Settings
 from media_analysis.decode import (
     DECODE_PIPELINE_VERSION,
     canonicalize,
+    decoded_pixel_count,
     enforce_limits,
     needs_canonical_audio,
     probe,
@@ -95,6 +99,7 @@ from media_analysis.person_matte.types import CanonicalMediaSpec
 from media_analysis.runtime import RuntimeState
 from media_analysis.schemas import AnalyzeRequest
 from media_analysis.source import fetch_source
+from media_analysis.telemetry import JobTelemetry
 from media_analysis.tools.model_lock import load_lock
 from media_analysis.upload import upload_artifact
 
@@ -111,6 +116,38 @@ def _check_job(job: Job, deadline: float) -> None:
         raise AnalyzeError(CANCELLED, "Analysis cancelled")
     if time.monotonic() >= deadline:
         raise AnalyzeError(TIMEOUT, "Analysis exceeded MEDIA_ANALYSIS_JOB_TIMEOUT_SEC")
+
+
+def _check_stage(job: Job, job_deadline: float, stage_deadline: float, stage: str) -> None:
+    _check_job(job, job_deadline)
+    if time.monotonic() >= stage_deadline:
+        raise AnalyzeError(
+            TIMEOUT,
+            f"Stage {stage} exceeded MEDIA_ANALYSIS_STAGE_TIMEOUT_SEC",
+        )
+
+
+@contextmanager
+def _feature_stage(
+    name: str,
+    telemetry: JobTelemetry,
+    job: Job,
+    job_deadline: float,
+    budget_sec: float,
+) -> Iterator[Any]:
+    if budget_sec <= 0:
+        raise AnalyzeError(
+            TIMEOUT,
+            f"Stage {name} exceeded MEDIA_ANALYSIS_STAGE_TIMEOUT_SEC",
+        )
+    stage_deadline = min(job_deadline, time.monotonic() + budget_sec)
+
+    def cancel_check() -> None:
+        _check_stage(job, job_deadline, stage_deadline, name)
+
+    cancel_check()
+    with telemetry.stage(name):
+        yield cancel_check
 
 
 def _remaining(deadline: float) -> float:
@@ -275,17 +312,20 @@ def run_analyze(
                 "Silero VAD is not available for audio analysis",
             )
     deadline = time.monotonic() + settings.media_analysis_job_timeout_sec
+    telemetry = JobTelemetry()
     _check_job(job, deadline)
+    stage_budget = settings.media_analysis_stage_timeout_sec
 
-    payload = fetch_source(
-        request.source.signedGetUrl,
-        settings=settings,
-        expires_at=request.source.expiresAt,
-        expected_sha256=request.source.sha256,
-        timeout_sec=min(settings.media_analysis_download_timeout_sec, _remaining(deadline)),
-        cancel_check=lambda: _check_job(job, deadline),
-    )
-    _check_job(job, deadline)
+    with _feature_stage("download", telemetry, job, deadline, stage_budget) as cancel_check:
+        payload = fetch_source(
+            request.source.signedGetUrl,
+            settings=settings,
+            expires_at=request.source.expiresAt,
+            expected_sha256=request.source.sha256,
+            timeout_sec=min(settings.media_analysis_download_timeout_sec, _remaining(deadline)),
+            cancel_check=cancel_check,
+        )
+        telemetry.bytes_downloaded = len(payload)
 
     with tempfile.TemporaryDirectory(prefix="media-analysis-") as tmp:
         src = Path(tmp) / "source.bin"
@@ -295,17 +335,21 @@ def run_analyze(
             canonicalize=request.canonicalize,
             features=request.features,
         )
-        if request.canonicalize:
-            dest = Path(tmp) / "canonical.mp4"
-            media = canonicalize(
-                src,
-                dest,
-                timeout_sec=_remaining(deadline),
-                preserve_audio=preserve_audio,
-            )
-            work = dest
-        else:
-            media = probe(src, timeout_sec=_remaining(deadline))
+        decode_stage = "canonicalize" if request.canonicalize else "probe"
+        with _feature_stage(decode_stage, telemetry, job, deadline, stage_budget):
+            if request.canonicalize:
+                dest = Path(tmp) / "canonical.mp4"
+                media = canonicalize(
+                    src,
+                    dest,
+                    timeout_sec=_remaining(deadline),
+                    preserve_audio=preserve_audio,
+                )
+                work = dest
+            else:
+                media = probe(src, timeout_sec=_remaining(deadline))
+        telemetry.frames_decoded = media.frame_count
+        telemetry.decoded_pixels = decoded_pixel_count(media)
         enforce_limits(media, settings)
         if request.analysisResolution:
             analysis_width = request.analysisResolution.width
@@ -322,7 +366,6 @@ def run_analyze(
                     INVALID_REQUEST,
                     "analysisResolution must preserve canonical aspect ratio",
                 )
-        _check_job(job, deadline)
         result = _compute(
             request,
             media,
@@ -332,27 +375,33 @@ def run_analyze(
             job,
             deadline,
             work_dir=Path(tmp),
+            telemetry=telemetry,
         )
         if (
             request.canonicalize
             and request.outputGrants is not None
             and request.outputGrants.canonicalMp4 is not None
         ):
-            _check_job(job, deadline)
-            grant = request.outputGrants.canonicalMp4
-            artifact = upload_artifact(
-                work.read_bytes(),
-                grant.signedPutUrl,
-                settings=settings,
-                expires_at=grant.expiresAt,
-                mime_type="video/mp4",
-                timeout_sec=min(
-                    settings.media_analysis_download_timeout_sec,
-                    _remaining(deadline),
-                ),
-                cancel_check=lambda: _check_job(job, deadline),
-            )
+            with _feature_stage(
+                "upload_canonical", telemetry, job, deadline, stage_budget
+            ) as cancel_check:
+                grant = request.outputGrants.canonicalMp4
+                artifact_bytes = work.read_bytes()
+                artifact = upload_artifact(
+                    artifact_bytes,
+                    grant.signedPutUrl,
+                    settings=settings,
+                    expires_at=grant.expiresAt,
+                    mime_type="video/mp4",
+                    timeout_sec=min(
+                        settings.media_analysis_download_timeout_sec,
+                        _remaining(deadline),
+                    ),
+                    cancel_check=cancel_check,
+                )
+                telemetry.bytes_uploaded += int(artifact["byteCount"])
             result["canonicalMedia"].update(artifact)
+        result["telemetry"] = telemetry.as_dict()
         return result
 
 
@@ -366,9 +415,20 @@ def _compute(
     deadline: float,
     *,
     work_dir: Path,
+    telemetry: JobTelemetry,
 ) -> dict[str, Any]:
     if settings.media_analysis_image.startswith("matte"):
-        return _compute_matte(request, media, path, runtime, settings, job, deadline, work_dir)
+        return _compute_matte(
+            request,
+            media,
+            path,
+            runtime,
+            settings,
+            job,
+            deadline,
+            work_dir,
+            telemetry,
+        )
 
     manifest = runtime.manifest
     fps = media.fps
@@ -377,6 +437,7 @@ def _compute(
     capabilities: dict[str, Any] = {}
     body: dict[str, Any] = {}
     warnings: list[str] = []
+    stage_budget = settings.media_analysis_stage_timeout_sec
 
     def cancel_check() -> None:
         _check_job(job, deadline)
@@ -388,157 +449,159 @@ def _compute(
     needs_shot_timeline = bool(SHOT_TIMELINE_FEATURES & requested_set) or prior_shots is not None
 
     if "shots" in requested_set:
-        _check_job(job, deadline)
-        try:
-            internal_shots = analyze_shots(path, media)
-            body["shots"] = internal_shots
-            capabilities["shots"] = {
-                "status": "completed",
-                "version": SHOT_ANALYZER_VERSION,
-            }
-        except AnalyzeError:
-            raise
-        except Exception:
-            capabilities["shots"] = {
-                "status": "failed",
-                "version": SHOT_ANALYZER_VERSION,
-            }
+        with _feature_stage("shots", telemetry, job, deadline, stage_budget) as stage_check:
+            try:
+                internal_shots = analyze_shots(path, media)
+                stage_check()
+                body["shots"] = internal_shots
+                capabilities["shots"] = {
+                    "status": "completed",
+                    "version": SHOT_ANALYZER_VERSION,
+                }
+            except AnalyzeError:
+                raise
+            except Exception:
+                capabilities["shots"] = {
+                    "status": "failed",
+                    "version": SHOT_ANALYZER_VERSION,
+                }
     elif prior_shots is not None and needs_shot_timeline:
         internal_shots = prior_shots
     elif needs_shot_timeline:
-        _check_job(job, deadline)
-        internal_shots = analyze_shots(path, media)
+        with _feature_stage("shots_internal", telemetry, job, deadline, stage_budget):
+            internal_shots = analyze_shots(path, media)
 
     if "subjects" in requested_set:
-        entry = manifest.by_name("yolox-tiny")
-        try:
-            if entry is None:
-                raise RuntimeError("subject model is absent")
-            if entry.stub:
-                subjects: list[dict[str, Any]] = []
-            else:
-                if internal_shots is None or runtime.subject_detector is None:
-                    raise RuntimeError("subject dependencies are unavailable")
-                subjects = analyze_subjects(
-                    path,
-                    media,
-                    shots=internal_shots,
-                    detector=runtime.subject_detector,
-                    cancel_check=cancel_check,
-                )
-            body["subjects"] = subjects
-            if internal_shots is not None:
-                classify_shots_with_subjects(internal_shots, subjects, media)
-            capabilities["subjects"] = {
-                "status": "completed",
-                "version": TRACKER_VERSION,
-            }
-        except AnalyzeError:
-            raise
-        except Exception:
-            capabilities["subjects"] = {
-                "status": "failed",
-                "version": TRACKER_VERSION,
-            }
+        with _feature_stage("subjects", telemetry, job, deadline, stage_budget) as stage_check:
+            entry = manifest.by_name("yolox-tiny")
+            try:
+                if entry is None:
+                    raise RuntimeError("subject model is absent")
+                if entry.stub:
+                    subjects: list[dict[str, Any]] = []
+                else:
+                    if internal_shots is None or runtime.subject_detector is None:
+                        raise RuntimeError("subject dependencies are unavailable")
+                    subjects = analyze_subjects(
+                        path,
+                        media,
+                        shots=internal_shots,
+                        detector=runtime.subject_detector,
+                        cancel_check=stage_check,
+                    )
+                body["subjects"] = subjects
+                if internal_shots is not None:
+                    classify_shots_with_subjects(internal_shots, subjects, media)
+                capabilities["subjects"] = {
+                    "status": "completed",
+                    "version": TRACKER_VERSION,
+                }
+            except AnalyzeError:
+                raise
+            except Exception:
+                capabilities["subjects"] = {
+                    "status": "failed",
+                    "version": TRACKER_VERSION,
+                }
 
-    _check_job(job, deadline)
     if "faces" in requested_set:
-        entry = manifest.by_name("yunet")
-        try:
-            if entry is None:
-                raise RuntimeError("face model is absent")
-            if entry.stub:
-                faces = empty_face_analysis()
-            else:
-                if internal_shots is None or runtime.face_detector is None:
-                    raise RuntimeError("face dependencies are unavailable")
-                face_subjects = body.get("subjects")
-                if (
-                    face_subjects is None
-                    and request.priorFacts
-                    and request.priorFacts.subjects is not None
-                ):
-                    face_subjects = [
-                        item.model_dump(by_alias=True)
-                        for item in request.priorFacts.subjects
-                    ]
-                faces = analyze_faces(
-                    path,
-                    media,
-                    shots=internal_shots,
-                    subjects=face_subjects,
-                    analysis_width=(
-                        request.analysisResolution.width
-                        if request.analysisResolution
-                        else None
-                    ),
-                    analysis_height=(
-                        request.analysisResolution.height
-                        if request.analysisResolution
-                        else None
-                    ),
-                    detector=runtime.face_detector,
-                    cancel_check=cancel_check,
-                )
-            body["faces"] = faces
-            capabilities["faces"] = {
-                "status": "completed",
-                "version": YUNET_CAPABILITY_VERSION,
-            }
-        except AnalyzeError:
-            raise
-        except Exception:
-            capabilities["faces"] = {
-                "status": "failed",
-                "version": YUNET_CAPABILITY_VERSION,
-            }
+        with _feature_stage("faces", telemetry, job, deadline, stage_budget) as stage_check:
+            entry = manifest.by_name("yunet")
+            try:
+                if entry is None:
+                    raise RuntimeError("face model is absent")
+                if entry.stub:
+                    faces = empty_face_analysis()
+                else:
+                    if internal_shots is None or runtime.face_detector is None:
+                        raise RuntimeError("face dependencies are unavailable")
+                    face_subjects = body.get("subjects")
+                    if (
+                        face_subjects is None
+                        and request.priorFacts
+                        and request.priorFacts.subjects is not None
+                    ):
+                        face_subjects = [
+                            item.model_dump(by_alias=True)
+                            for item in request.priorFacts.subjects
+                        ]
+                    faces = analyze_faces(
+                        path,
+                        media,
+                        shots=internal_shots,
+                        subjects=face_subjects,
+                        analysis_width=(
+                            request.analysisResolution.width
+                            if request.analysisResolution
+                            else None
+                        ),
+                        analysis_height=(
+                            request.analysisResolution.height
+                            if request.analysisResolution
+                            else None
+                        ),
+                        detector=runtime.face_detector,
+                        cancel_check=stage_check,
+                    )
+                body["faces"] = faces
+                capabilities["faces"] = {
+                    "status": "completed",
+                    "version": YUNET_CAPABILITY_VERSION,
+                }
+            except AnalyzeError:
+                raise
+            except Exception:
+                capabilities["faces"] = {
+                    "status": "failed",
+                    "version": YUNET_CAPABILITY_VERSION,
+                }
 
-    _check_job(job, deadline)
     if "ocr" in requested_set:
-        entry = manifest.by_name("PP-OCRv5_mobile_det")
-        try:
-            if entry is None:
-                raise RuntimeError("OCR model is absent")
-            if entry.stub:
-                regions: list[dict[str, Any]] = []
-                ocr_status = "completed"
-            else:
-                if runtime.ocr_session is None:
-                    raise RuntimeError("OCR runtime is unavailable")
-                result = analyze_ocr(
-                    path,
-                    media,
-                    shots=internal_shots,
-                    model_path=settings.media_analysis_model_dir / entry.file,
-                    session=runtime.ocr_session,
-                    cancel_check=cancel_check,
-                )
-                regions = result.regions
-                ocr_status = result.status
-            if ocr_status == "failed":
+        with _feature_stage("ocr", telemetry, job, deadline, stage_budget) as stage_check:
+            entry = manifest.by_name("PP-OCRv5_mobile_det")
+            try:
+                if entry is None:
+                    raise RuntimeError("OCR model is absent")
+                if entry.stub:
+                    regions: list[dict[str, Any]] = []
+                    ocr_status = "completed"
+                else:
+                    if runtime.ocr_session is None:
+                        raise RuntimeError("OCR runtime is unavailable")
+                    result = analyze_ocr(
+                        path,
+                        media,
+                        shots=internal_shots,
+                        model_path=settings.media_analysis_model_dir / entry.file,
+                        session=runtime.ocr_session,
+                        cancel_check=stage_check,
+                    )
+                    regions = result.regions
+                    ocr_status = result.status
+                if ocr_status == "failed":
+                    capabilities["ocr"] = {
+                        "status": "failed",
+                        "version": OCR_DETECTOR_VERSION,
+                        "warningCodes": ["OCR_UNAVAILABLE"],
+                    }
+                    warnings.append("OCR_UNAVAILABLE")
+                else:
+                    body["reservedRegions"] = regions
+                    capabilities["ocr"] = {
+                        "status": "completed",
+                        "version": OCR_DETECTOR_VERSION,
+                    }
+                    if not regions:
+                        warnings.append("OCR_EMPTY")
+            except AnalyzeError:
+                raise
+            except Exception:
                 capabilities["ocr"] = {
                     "status": "failed",
                     "version": OCR_DETECTOR_VERSION,
                     "warningCodes": ["OCR_UNAVAILABLE"],
                 }
                 warnings.append("OCR_UNAVAILABLE")
-            else:
-                body["reservedRegions"] = regions
-                capabilities["ocr"] = {
-                    "status": "completed",
-                    "version": OCR_DETECTOR_VERSION,
-                }
-                if not regions:
-                    warnings.append("OCR_EMPTY")
-        except AnalyzeError:
-            raise
-        except Exception:
-            capabilities["ocr"] = {
-                "status": "failed",
-                "version": OCR_DETECTOR_VERSION,
-                "warningCodes": ["OCR_UNAVAILABLE"],
-            }
-            warnings.append("OCR_UNAVAILABLE")
 
     subject_tracks = body.get("subjects")
     if subject_tracks is None and request.priorFacts and request.priorFacts.subjects:
@@ -550,185 +613,199 @@ def _compute(
 
     visual_requested = VISUAL_SHARED & requested_set
     if visual_requested:
-        _check_job(job, deadline)
         with BoundedFrameAccess(path, cancel_check=cancel_check) as frame_access:
             read_frame = frame_access.read_bgr
             motion_result = None
             motion_estimator = None
 
             if "motion" in requested_set:
-                try:
-                    motion_result = analyze_motion(
-                        path,
-                        media,
-                        frame_provider=read_frame,
-                        subject_boxes_by_frame=subject_boxes,
-                        cancel_check=cancel_check,
-                    )
-                    body["motion"] = motion_result.as_motion_analysis()
-                    capabilities["motion"] = {
-                        "status": "completed",
-                        "version": MOTION_ANALYZER_VERSION,
-                    }
-                except AnalyzeError:
-                    raise
-                except Exception:
-                    capabilities["motion"] = {
-                        "status": "failed",
-                        "version": MOTION_ANALYZER_VERSION,
-                    }
+                with _feature_stage(
+                    "motion", telemetry, job, deadline, stage_budget
+                ) as stage_check:
+                    try:
+                        motion_result = analyze_motion(
+                            path,
+                            media,
+                            frame_provider=read_frame,
+                            subject_boxes_by_frame=subject_boxes,
+                            cancel_check=stage_check,
+                        )
+                        body["motion"] = motion_result.as_motion_analysis()
+                        capabilities["motion"] = {
+                            "status": "completed",
+                            "version": MOTION_ANALYZER_VERSION,
+                        }
+                    except AnalyzeError:
+                        raise
+                    except Exception:
+                        capabilities["motion"] = {
+                            "status": "failed",
+                            "version": MOTION_ANALYZER_VERSION,
+                        }
 
             if "quality" in requested_set:
-                try:
-                    if motion_result is None and "motion" not in requested_set:
-                        motion_estimator = make_internal_motion_estimator(
+                with _feature_stage(
+                    "quality", telemetry, job, deadline, stage_budget
+                ) as stage_check:
+                    try:
+                        if motion_result is None and "motion" not in requested_set:
+                            motion_estimator = make_internal_motion_estimator(
+                                media,
+                                read_frame,
+                                subject_boxes_by_frame=subject_boxes,
+                                cancel_check=stage_check,
+                            )
+                        quality = analyze_quality(
+                            path,
                             media,
-                            read_frame,
+                            shots=internal_shots,
+                            motion=motion_result,
+                            compute_motion=motion_estimator,
                             subject_boxes_by_frame=subject_boxes,
-                            cancel_check=cancel_check,
+                            frame_provider=read_frame,
+                            cancel_check=stage_check,
                         )
-                    quality = analyze_quality(
-                        path,
-                        media,
-                        shots=internal_shots,
-                        motion=motion_result,
-                        compute_motion=motion_estimator,
-                        subject_boxes_by_frame=subject_boxes,
-                        frame_provider=read_frame,
-                        cancel_check=cancel_check,
-                    )
-                    body["quality"] = quality.as_quality_analysis()
-                    capabilities["quality"] = {
-                        "status": "completed",
-                        "version": QUALITY_POLICY_VERSION,
-                    }
-                except AnalyzeError:
-                    raise
-                except Exception:
-                    capabilities["quality"] = {
-                        "status": "failed",
-                        "version": QUALITY_POLICY_VERSION,
-                    }
+                        body["quality"] = quality.as_quality_analysis()
+                        capabilities["quality"] = {
+                            "status": "completed",
+                            "version": QUALITY_POLICY_VERSION,
+                        }
+                    except AnalyzeError:
+                        raise
+                    except Exception:
+                        capabilities["quality"] = {
+                            "status": "failed",
+                            "version": QUALITY_POLICY_VERSION,
+                        }
 
             if "exposure" in requested_set:
-                try:
-                    exposure = analyze_exposure(
-                        path,
-                        media,
-                        shots=internal_shots,
-                        prior_facts=request.priorFacts,
-                        fill_only=fill_only,
-                        frame_provider=read_frame,
-                        cancel_check=cancel_check,
-                    )
-                    body["exposure"] = {"perShot": exposure.per_shot}
-                    capabilities["exposure"] = {
-                        "status": exposure.status,
-                        "version": EXPOSURE_ANALYZER_VERSION,
-                    }
-                except AnalyzeError:
-                    raise
-                except Exception:
-                    capabilities["exposure"] = {
-                        "status": "failed",
-                        "version": EXPOSURE_ANALYZER_VERSION,
-                    }
+                with _feature_stage(
+                    "exposure", telemetry, job, deadline, stage_budget
+                ) as stage_check:
+                    try:
+                        exposure = analyze_exposure(
+                            path,
+                            media,
+                            shots=internal_shots,
+                            prior_facts=request.priorFacts,
+                            fill_only=fill_only,
+                            frame_provider=read_frame,
+                            cancel_check=stage_check,
+                        )
+                        body["exposure"] = {"perShot": exposure.per_shot}
+                        capabilities["exposure"] = {
+                            "status": exposure.status,
+                            "version": EXPOSURE_ANALYZER_VERSION,
+                        }
+                    except AnalyzeError:
+                        raise
+                    except Exception:
+                        capabilities["exposure"] = {
+                            "status": "failed",
+                            "version": EXPOSURE_ANALYZER_VERSION,
+                        }
 
             if "thumbnails" in requested_set:
-                try:
-                    def upload_thumbnail(grant: ThumbnailGrant, payload: bytes) -> None:
-                        upload_artifact(
-                            payload,
-                            grant.signed_put_url,
-                            settings=settings,
-                            expires_at=grant.expires_at,
-                            mime_type=THUMBNAIL_MIME_TYPE,
-                            timeout_sec=min(
-                                settings.media_analysis_download_timeout_sec,
-                                _remaining(deadline),
-                            ),
-                            cancel_check=cancel_check,
-                        )
+                with _feature_stage(
+                    "thumbnails", telemetry, job, deadline, stage_budget
+                ) as stage_check:
+                    try:
+                        def upload_thumbnail(grant: ThumbnailGrant, payload: bytes) -> None:
+                            uploaded = upload_artifact(
+                                payload,
+                                grant.signed_put_url,
+                                settings=settings,
+                                expires_at=grant.expires_at,
+                                mime_type=THUMBNAIL_MIME_TYPE,
+                                timeout_sec=min(
+                                    settings.media_analysis_download_timeout_sec,
+                                    _remaining(deadline),
+                                ),
+                                cancel_check=stage_check,
+                            )
+                            telemetry.bytes_uploaded += int(uploaded["byteCount"])
 
-                    thumb = analyze_thumbnails(
-                        path,
-                        media,
-                        shots=internal_shots,
-                        prior_facts=request.priorFacts,
-                        fill_only=fill_only,
-                        thumbnail_grants=_thumbnail_grants(request),
-                        upload_callback=upload_thumbnail,
-                        frame_provider=read_frame,
-                        cancel_check=cancel_check,
-                    )
-                    body["thumbnailCandidates"] = thumb.candidates
-                    capability: dict[str, Any] = {
-                        "status": thumb.status,
-                        "version": thumb.version,
-                    }
-                    if thumb.warning_codes:
-                        capability["warningCodes"] = list(thumb.warning_codes)
-                        warnings.extend(thumb.warning_codes)
-                    capabilities["thumbnails"] = capability
-                except AnalyzeError:
-                    raise
-                except Exception:
-                    capabilities["thumbnails"] = {
-                        "status": "failed",
-                        "version": THUMBNAIL_ANALYZER_VERSION,
-                    }
+                        thumb = analyze_thumbnails(
+                            path,
+                            media,
+                            shots=internal_shots,
+                            prior_facts=request.priorFacts,
+                            fill_only=fill_only,
+                            thumbnail_grants=_thumbnail_grants(request),
+                            upload_callback=upload_thumbnail,
+                            frame_provider=read_frame,
+                            cancel_check=stage_check,
+                        )
+                        body["thumbnailCandidates"] = thumb.candidates
+                        capability: dict[str, Any] = {
+                            "status": thumb.status,
+                            "version": thumb.version,
+                        }
+                        if thumb.warning_codes:
+                            capability["warningCodes"] = list(thumb.warning_codes)
+                            warnings.extend(thumb.warning_codes)
+                        capabilities["thumbnails"] = capability
+                    except AnalyzeError:
+                        raise
+                    except Exception:
+                        capabilities["thumbnails"] = {
+                            "status": "failed",
+                            "version": THUMBNAIL_ANALYZER_VERSION,
+                        }
 
     if AUDIO_FEATURES & requested_set:
-        _check_job(job, deadline)
-        shared_pcm = extract_analysis_pcm(
-            path,
-            has_audio=media.has_audio,
-            source_duration_sec=media.duration,
-            source_sample_rate=media.audio_sample_rate,
-            source_channel_count=media.audio_channel_count,
-            timeout_sec=_remaining(deadline),
-            cancel_check=cancel_check,
-        )
+        with _feature_stage("pcm", telemetry, job, deadline, stage_budget) as stage_check:
+            shared_pcm = extract_analysis_pcm(
+                path,
+                has_audio=media.has_audio,
+                source_duration_sec=media.duration,
+                source_sample_rate=media.audio_sample_rate,
+                source_channel_count=media.audio_channel_count,
+                timeout_sec=_remaining(deadline),
+                cancel_check=stage_check,
+            )
         vad_session = _resolve_vad_session(runtime, manifest, settings)
 
         if "audio" in requested_set:
-            try:
-                audio = analyze_audio(
-                    shared_pcm,
-                    source_path=path if media.has_audio else None,
-                    fps=fps,
-                    vad_session=vad_session,
-                    require_vad=True,
-                    timeout_sec=_remaining(deadline),
-                    cancel_check=cancel_check,
-                )
-                body["audio"] = audio.to_payload()
-                audio_warnings = list(audio.warning_codes)
-                if audio_warnings:
-                    warnings.extend(audio_warnings)
-                capabilities["audio"] = audio_capability(
-                    status=audio.status,
-                    warning_codes=audio_warnings or None,
-                )
-            except AnalyzeError:
-                raise
-            except Exception:
-                capabilities["audio"] = audio_capability(status="failed")
+            with _feature_stage("audio", telemetry, job, deadline, stage_budget) as stage_check:
+                try:
+                    audio = analyze_audio(
+                        shared_pcm,
+                        source_path=path if media.has_audio else None,
+                        fps=fps,
+                        vad_session=vad_session,
+                        require_vad=True,
+                        timeout_sec=_remaining(deadline),
+                        cancel_check=stage_check,
+                    )
+                    body["audio"] = audio.to_payload()
+                    audio_warnings = list(audio.warning_codes)
+                    if audio_warnings:
+                        warnings.extend(audio_warnings)
+                    capabilities["audio"] = audio_capability(
+                        status=audio.status,
+                        warning_codes=audio_warnings or None,
+                    )
+                except AnalyzeError:
+                    raise
+                except Exception:
+                    capabilities["audio"] = audio_capability(status="failed")
 
         if "waveform" in requested_set:
-            try:
-                waveform_payload, waveform_warnings = analyze_waveform(shared_pcm)
-                body["waveform"] = waveform_payload
-                if waveform_warnings:
-                    warnings.extend(waveform_warnings)
-                capabilities["waveform"] = waveform_capability(
-                    status="completed",
-                    warning_codes=waveform_warnings or None,
-                )
-            except AnalyzeError:
-                raise
-            except Exception:
-                capabilities["waveform"] = waveform_capability(status="failed")
+            with _feature_stage("waveform", telemetry, job, deadline, stage_budget):
+                try:
+                    waveform_payload, waveform_warnings = analyze_waveform(shared_pcm)
+                    body["waveform"] = waveform_payload
+                    if waveform_warnings:
+                        warnings.extend(waveform_warnings)
+                    capabilities["waveform"] = waveform_capability(
+                        status="completed",
+                        warning_codes=waveform_warnings or None,
+                    )
+                except AnalyzeError:
+                    raise
+                except Exception:
+                    capabilities["waveform"] = waveform_capability(status="failed")
 
     if request.analysisResolution:
         body["analysisTransform"] = analysis_transform(
@@ -772,6 +849,7 @@ def _compute(
         "visualAnalyzerVersion": __version__,
         "decodePipelineVersion": DECODE_PIPELINE_VERSION,
         "samplingPolicyVersion": SAMPLING_POLICY_VERSION,
+        **analyze_build_provenance(),
     }
     if "subjects" in requested_set:
         provenance["trackerVersion"] = TRACKER_VERSION
@@ -860,11 +938,13 @@ def _compute_matte(
     job: Job,
     deadline: float,
     work_dir: Path,
+    telemetry: JobTelemetry,
 ) -> dict[str, Any]:
     requested = list(request.features)
     capabilities: dict[str, Any] = {}
     body: dict[str, Any] = {}
     warnings: list[str] = []
+    stage_budget = settings.media_analysis_stage_timeout_sec
 
     def cancel_check() -> None:
         _check_job(job, deadline)
@@ -897,25 +977,32 @@ def _compute_matte(
         )
 
     try:
-        with BoundedFrameAccess(path, cancel_check=cancel_check) as frame_access:
+        with _feature_stage(
+            "person_matte", telemetry, job, deadline, stage_budget
+        ) as stage_check:
+            with BoundedFrameAccess(path, cancel_check=stage_check) as frame_access:
 
-            def frame_stream():
-                for index in range(media.frame_count):
-                    cancel_check()
-                    yield index, frame_access.read_bgr(index)
+                def frame_stream():
+                    for index in range(media.frame_count):
+                        stage_check()
+                        yield index, frame_access.read_bgr(index)
 
-            candidate = run_person_matte_stage1(
-                frames=frame_stream(),
-                canonical=canonical,
-                matte_target=_matte_target_dict(request),
-                output_grants=_output_grants_dict(request),
-                prior_facts=_prior_facts_dict(request),
-                session=runtime.modnet_session,
-                upload=upload_matte,
-                work_dir=work_dir,
-                cancel_check=cancel_check,
-                deadline=deadline,
-            )
+                def upload_timed(body_bytes: bytes, content_type: str, grant: Any) -> None:
+                    upload_matte(body_bytes, content_type, grant)
+                    telemetry.bytes_uploaded += len(body_bytes)
+
+                candidate = run_person_matte_stage1(
+                    frames=frame_stream(),
+                    canonical=canonical,
+                    matte_target=_matte_target_dict(request),
+                    output_grants=_output_grants_dict(request),
+                    prior_facts=_prior_facts_dict(request),
+                    session=runtime.modnet_session,
+                    upload=upload_timed,
+                    work_dir=work_dir,
+                    cancel_check=stage_check,
+                    deadline=deadline,
+                )
         body["personMatte"] = candidate.as_dict()
         capabilities["person_matte"] = {
             "status": "completed",
@@ -949,6 +1036,7 @@ def _compute_matte(
         "decodePipelineVersion": DECODE_PIPELINE_VERSION,
         "referenceMode": runtime.reference_mode,
         "productionInferenceReady": runtime.production_inference_ready,
+        **analyze_build_provenance(),
     }
     provenance.update(
         matte_provenance_block(

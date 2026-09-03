@@ -66,6 +66,12 @@ logical request hash.
 - Subject tracks are not identities, and OCR returns regions rather than text.
 - Generated artifacts include byte counts and SHA-256 digests.
 - Provisional measurements include versioned policy identifiers.
+- `telemetry` reports per-stage wall time, downloaded bytes, decoded frames,
+  decoded pixels, and uploaded bytes. It is additive diagnostics and is not
+  part of request identity.
+- `provenance.ffmpegBuild` records the worker's `ffmpeg`/`ffprobe` version and
+  configure line. `provenance.runtimeBuild` records Python, ONNX Runtime,
+  OpenCV, and NumPy versions.
 
 ## Cancellation
 

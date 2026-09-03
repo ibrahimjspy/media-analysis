@@ -28,7 +28,9 @@ gates cannot silently affect the CPU analysis worker.
 
 One process handles one active analysis at a time until load benchmarks justify
 more concurrency. The process-local replay cache is bounded and is not a durable
-job store.
+job store. Each job records stage timings and byte counts, enforces a decoded
+pixel ceiling plus per-stage deadlines, and reports FFmpeg/runtime identity in
+`provenance`.
 
 ## Canonical media
 

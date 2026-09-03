@@ -67,7 +67,7 @@ Apache-2.0 matches the default model stack (YOLOX, OpenCV, PaddleOCR, MODNet) an
 
 **Do not add Ultralytics YOLO** (YOLOv5/v8/v11, `ultralytics` pip) unless you intentionally relicense this project under AGPL-3.0 or obtain an Ultralytics Enterprise license. That is a legal change, not a convenience import.
 
-**FFmpeg:** a typical distro binary that encodes H.264 with `libx264` is a GPL-enabled FFmpeg build. Shipping a Docker image that contains that binary has FFmpeg / x264 source-offer duties. It does **not** relicense the Python in this repo. Record `ffmpeg -version` and the configure line in `decodePipelineVersion`.
+**FFmpeg:** a typical distro binary that encodes H.264 with `libx264` is a GPL-enabled FFmpeg build. Shipping a Docker image that contains that binary has FFmpeg / x264 source-offer duties. It does **not** relicense the Python in this repo. Each `/analyze` response records `ffmpeg -version` and the configure line in `provenance.ffmpegBuild`. `decodePipelineVersion` remains the recipe identity.
 
 Robust Video Matting (RVM) is GPL-3.0 and is a quality reference only. Do not vendor it into an image without a written license decision.
 
@@ -148,12 +148,14 @@ It sets `MEDIA_ANALYSIS_MATTE_REFERENCE_MODE=1`, reports
 | `MEDIA_ANALYSIS_MAX_WIDTH` | Default `1920` |
 | `MEDIA_ANALYSIS_MAX_HEIGHT` | Default `1920` |
 | `MEDIA_ANALYSIS_MAX_BYTES` | Source download ceiling |
+| `MEDIA_ANALYSIS_MAX_DECODED_PIXELS` | `width * height * frameCount` ceiling; default `1920*1920*1800` |
 | `MEDIA_ANALYSIS_MODEL_DIR` | Default `/models` in the image, `./models` locally |
 | `MEDIA_ANALYSIS_IMAGE` | `analysis-cpu` or `matte-cpu` |
 | `MEDIA_ANALYSIS_ALLOW_STUB_MODELS` | Tests only; never enable on a production worker |
 | `MEDIA_ANALYSIS_MATTE_REFERENCE_MODE` | Explicit v2 reference mode; never production-ready |
 | `MEDIA_ANALYSIS_DOWNLOAD_TIMEOUT_SEC` | Per-download timeout; default `30` |
 | `MEDIA_ANALYSIS_JOB_TIMEOUT_SEC` | End-to-end job deadline; default `240` |
+| `MEDIA_ANALYSIS_STAGE_TIMEOUT_SEC` | Per-stage deadline; default `60` |
 
 Never accept a raw object key or an arbitrary caller URL on the public `/analyze` body. The trusted orchestrator minting the signed GET is the only supported client.
 Allowlist entries are exact hosts unless written as `*.storage.example`; the wildcard matches subdomains only.

@@ -29,7 +29,7 @@ by loading and warming its stateful ONNX interface.
 
 ## PP-OCR provenance (interim)
 
-The current lock points at a **GreatV/oar-ocr community export**, not an official PaddleOCR artifact and not a media-analysis owned export. See [ppocr-owned-export.md](ppocr-owned-export.md) for the reproducible owned export recipe.
+The current lock points at a **GreatV/oar-ocr community export**, not an official PaddleOCR artifact and not a media-analysis owned export. See [ppocr-owned-export.md](ppocr-owned-export.md) and `models/ppocr-export.lock.json` for the reproducible owned export recipe. The export GitHub Action produces an ONNX artifact; it does not flip the production gate.
 
 Docker sets `MEDIA_ANALYSIS_PP_OCR_EXPORT=community-interim` until an owned export is recorded.
 
@@ -65,8 +65,12 @@ pytest tests/production/test_prod_real_model_runtime_compat.py -m real_models
 Opt-in real-model HTTP pipeline (boot, warmup, decode, all v1 runners, and response):
 
 ```bash
-pytest tests/production/test_prod_real_http_pipeline.py -m real_models
+pytest tests/production/test_prod_real_http_pipeline.py -m real_models -o addopts="-q --strict-markers"
 ```
+
+Linux CI runs the full `real_models` marker, including generated OCR, speech,
+VFR, and rotation goldens. That job proves load and pipeline completion. It
+does not flip the owned PP-OCR parity gate.
 
 ## Docker
 
@@ -100,7 +104,7 @@ Full-tree `ruff check src tests` runs in CI with no feature-file exemptions.
 1. Download or export artifact; compute SHA-256.
 2. Update `models/manifest.lock.json` (URL, revision, provenance, gates).
 3. `./scripts/vendor-models.sh --profile analysis-cpu --dest ./models --force`
-4. `pytest tests/production -m real_models`
+4. `pytest tests/production -m real_models -o addopts="-q --strict-markers"`
 
 For `upstream-commit` artifacts, use the immutable raw commit URL and verify both SHA-256
 and byte size before opening the corresponding production gate.

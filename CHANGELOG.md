@@ -10,6 +10,14 @@ All notable changes are documented here. This project follows
 
 - Canonical CFR MP4 delivery through `outputGrants.canonicalMp4`, including
   response `sha256` and `byteCount` for orchestrator verification.
+- Per-stage timings, download/upload byte counts, decoded-pixel limits, and
+  per-stage timeouts on `/analyze`.
+- FFmpeg configure/version and runtime library provenance on every result.
+- Generated people, face, OCR, speech, VFR, and rotation golden fixtures, plus
+  a Linux CI job that runs real-model tests.
+- Reproducible PP-OCRv5 owned-export toolchain, Paddle/ONNX parity helpers,
+  and synthetic OCR recall floors. The production OCR gate stays closed until
+  an owned artifact is hosted and the reference tensor is committed.
 
 ### Fixed
 

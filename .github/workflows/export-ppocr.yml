@@ -1,0 +1,36 @@
+name: Export PP-OCR
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-linux-amd64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned export toolchain
+        run: |
+          sudo apt-get update && sudo apt-get install -y libgomp1
+          pip install paddlepaddle==3.1.1 paddle2onnx==2.1.0 onnx==1.17.0 packaging
+
+      - name: Export official inference weights to ONNX
+        env:
+          PYTHONPATH: src
+        run: python -m media_analysis.tools.export_ppocr --out artifacts/PP-OCRv5_mobile_det.onnx
+
+      - name: Upload owned export
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppocr-owned-export
+          path: |
+            artifacts/PP-OCRv5_mobile_det.onnx
+            artifacts/PP-OCRv5_mobile_det.recipe.json

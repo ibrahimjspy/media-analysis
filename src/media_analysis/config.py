@@ -24,6 +24,8 @@ MATTE_FEATURES = frozenset({"person_matte"})
 ALL_FEATURES = CPU_FEATURES | MATTE_FEATURES
 V1_FEATURES = frozenset({"subjects", "faces", "ocr", "shots"})
 IMPLEMENTED_CPU = CPU_FEATURES
+# 1920x1920 at 30 fps for the default 60s duration envelope.
+DEFAULT_MAX_DECODED_PIXELS = 1920 * 1920 * 1800
 
 
 class Settings(BaseSettings):
@@ -35,11 +37,13 @@ class Settings(BaseSettings):
     media_analysis_max_width: int = 1920
     media_analysis_max_height: int = 1920
     media_analysis_max_bytes: int = 80 * 1024 * 1024
+    media_analysis_max_decoded_pixels: int = DEFAULT_MAX_DECODED_PIXELS
     media_analysis_model_dir: Path = Path("./models")
     media_analysis_image: str = "analysis-cpu"
     media_analysis_allow_stub_models: bool = False
     media_analysis_download_timeout_sec: float = 30
     media_analysis_job_timeout_sec: float = 240
+    media_analysis_stage_timeout_sec: float = 60
 
     @property
     def allowed_hosts(self) -> frozenset[str]:

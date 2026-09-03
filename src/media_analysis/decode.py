@@ -121,6 +121,10 @@ def _count_frames(path: Path, *, timeout_sec: float | None = None) -> int:
     return int(text)
 
 
+def decoded_pixel_count(media: ProbedMedia) -> int:
+    return media.width * media.height * media.frame_count
+
+
 def enforce_limits(media: ProbedMedia, settings: Settings) -> None:
     if media.duration > settings.media_analysis_max_duration_sec + 0.05:
         raise AnalyzeError(
@@ -132,6 +136,11 @@ def enforce_limits(media: ProbedMedia, settings: Settings) -> None:
         or media.height > settings.media_analysis_max_height
     ):
         raise AnalyzeError(LIMIT_EXCEEDED, "Source dimensions exceed configured maximum")
+    if decoded_pixel_count(media) > settings.media_analysis_max_decoded_pixels:
+        raise AnalyzeError(
+            LIMIT_EXCEEDED,
+            "Source decoded pixels exceed MEDIA_ANALYSIS_MAX_DECODED_PIXELS",
+        )
 
 
 def needs_audio_pipeline(features: list[str]) -> bool:

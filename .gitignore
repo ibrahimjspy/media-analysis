@@ -23,12 +23,17 @@ htmlcov/
 models/**
 !models/manifest.json
 !models/manifest.lock.json
+!models/ppocr-export.lock.json
 !models/README.md
 
 *.mp4
 *.mov
 *.mkv
 *.wav
+benchmarks/*.json
+.ppocr-export/
+artifacts/*.onnx
+artifacts/*.recipe.json
 dist/
 build/
 *.egg-info/

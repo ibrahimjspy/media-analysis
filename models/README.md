@@ -7,6 +7,7 @@ Weights are **vendored at setup or image build**, never on the first `/analyze` 
 | File | Purpose |
 |---|---|
 | `manifest.lock.json` | Pinned upstream URLs, revisions, SHA-256, and sizes (committed) |
+| `ppocr-export.lock.json` | Official PP-OCR inference URL and owned-export toolchain pins |
 | `manifest.json` | Runtime manifest written by the vendor tool (generated locally / in Docker) |
 | `*.onnx` | Vendored weights (gitignored unless a release explicitly ships them) |
 

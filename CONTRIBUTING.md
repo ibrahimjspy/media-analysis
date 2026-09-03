@@ -28,8 +28,13 @@ Tests create checksum-matched stub model files, so the default suite does not
 download model weights. Real-model checks are opt-in:
 
 ```bash
-pytest tests/production -m real_models
+pytest tests/production -m real_models -o addopts="-q --strict-markers"
 ```
+
+Owned PP-OCR export is a separate linux/amd64 job. After the recipe in
+`docs/ppocr-owned-export.md` produces a hosted ONNX and
+`tests/fixtures/ppocr_parity/reference.npz`, the lock gate can be opened.
+Do not flip `ownedPpOcrExportRecorded` without those artifacts.
 
 ## Making a change
 
