@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.fixtures.generate import write_rotated_mp4, write_speech_tone_mp4, write_vfr_mp4
 
+import media_analysis.analyze as analyze_module
 from media_analysis.app import create_app, reset_manifest
 
 
@@ -48,23 +49,39 @@ def test_analyze_reports_telemetry_and_build_provenance(
 
 @pytest.mark.e2e
 @pytest.mark.ffmpeg
-def test_decoded_pixel_limit_is_enforced_after_probe(
+@pytest.mark.parametrize("canonicalize", [False, True])
+def test_decoded_pixel_limit_is_enforced_before_decode(
     settings,
     auth_headers: dict[str, str],
     source_server: dict,
     future_expiry: str,
+    canonicalize: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     limited = settings.model_copy(update={"media_analysis_max_decoded_pixels": 1})
+    canonicalize_called = False
+    original_canonicalize = analyze_module.canonicalize
+
+    def track_canonicalize(*args, **kwargs):
+        nonlocal canonicalize_called
+        canonicalize_called = True
+        return original_canonicalize(*args, **kwargs)
+
+    monkeypatch.setattr(analyze_module, "canonicalize", track_canonicalize)
     reset_manifest()
     try:
         with TestClient(create_app(limited)) as client:
+            payload = _body(source_server["url"], ["shots"], "pixels", future_expiry)
+            payload["canonicalize"] = canonicalize
+            payload["idempotencyKey"] = "pixels-canon" if canonicalize else "pixels"
             response = client.post(
                 "/analyze",
                 headers=auth_headers,
-                json=_body(source_server["url"], ["shots"], "pixels", future_expiry),
+                json=payload,
             )
         assert response.status_code == 413
         assert response.json()["code"] == "LIMIT_EXCEEDED"
+        assert canonicalize_called is False
     finally:
         reset_manifest()
 

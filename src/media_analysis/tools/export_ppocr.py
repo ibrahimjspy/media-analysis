@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import tarfile
 import urllib.request
 from pathlib import Path
@@ -40,6 +41,8 @@ def download_file(url: str, dest: Path) -> Path:
 
 
 def extract_tar(archive: Path, dest: Path) -> Path:
+    if dest.exists():
+        shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive, "r:*") as handle:
         handle.extractall(dest, filter="data")

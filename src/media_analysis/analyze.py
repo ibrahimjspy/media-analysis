@@ -127,6 +127,38 @@ def _check_stage(job: Job, job_deadline: float, stage_deadline: float, stage: st
         )
 
 
+class StageDeadline:
+    """Per-stage cancel guard. Callable so existing cancel_check=stage still works."""
+
+    def __init__(
+        self,
+        name: str,
+        job: Job,
+        job_deadline: float,
+        stage_deadline: float,
+    ) -> None:
+        self.name = name
+        self.job = job
+        self.job_deadline = job_deadline
+        self.stage_deadline = stage_deadline
+
+    def check(self) -> None:
+        _check_stage(self.job, self.job_deadline, self.stage_deadline, self.name)
+
+    def __call__(self) -> None:
+        self.check()
+
+    def remaining(self) -> float:
+        self.check()
+        remaining = min(self.job_deadline, self.stage_deadline) - time.monotonic()
+        if remaining <= 0:
+            raise AnalyzeError(
+                TIMEOUT,
+                f"Stage {self.name} exceeded MEDIA_ANALYSIS_STAGE_TIMEOUT_SEC",
+            )
+        return remaining
+
+
 @contextmanager
 def _feature_stage(
     name: str,
@@ -134,20 +166,22 @@ def _feature_stage(
     job: Job,
     job_deadline: float,
     budget_sec: float,
-) -> Iterator[Any]:
+) -> Iterator[StageDeadline]:
     if budget_sec <= 0:
         raise AnalyzeError(
             TIMEOUT,
             f"Stage {name} exceeded MEDIA_ANALYSIS_STAGE_TIMEOUT_SEC",
         )
-    stage_deadline = min(job_deadline, time.monotonic() + budget_sec)
-
-    def cancel_check() -> None:
-        _check_stage(job, job_deadline, stage_deadline, name)
-
-    cancel_check()
+    stage = StageDeadline(
+        name,
+        job,
+        job_deadline,
+        min(job_deadline, time.monotonic() + budget_sec),
+    )
+    stage.check()
     with telemetry.stage(name):
-        yield cancel_check
+        yield stage
+        stage.check()
 
 
 def _remaining(deadline: float) -> float:
@@ -316,14 +350,14 @@ def run_analyze(
     _check_job(job, deadline)
     stage_budget = settings.media_analysis_stage_timeout_sec
 
-    with _feature_stage("download", telemetry, job, deadline, stage_budget) as cancel_check:
+    with _feature_stage("download", telemetry, job, deadline, stage_budget) as stage:
         payload = fetch_source(
             request.source.signedGetUrl,
             settings=settings,
             expires_at=request.source.expiresAt,
             expected_sha256=request.source.sha256,
-            timeout_sec=min(settings.media_analysis_download_timeout_sec, _remaining(deadline)),
-            cancel_check=cancel_check,
+            timeout_sec=min(settings.media_analysis_download_timeout_sec, stage.remaining()),
+            cancel_check=stage,
         )
         telemetry.bytes_downloaded = len(payload)
 
@@ -335,22 +369,26 @@ def run_analyze(
             canonicalize=request.canonicalize,
             features=request.features,
         )
-        decode_stage = "canonicalize" if request.canonicalize else "probe"
-        with _feature_stage(decode_stage, telemetry, job, deadline, stage_budget):
-            if request.canonicalize:
-                dest = Path(tmp) / "canonical.mp4"
-                media = canonicalize(
-                    src,
-                    dest,
-                    timeout_sec=_remaining(deadline),
-                    preserve_audio=preserve_audio,
-                )
-                work = dest
-            else:
-                media = probe(src, timeout_sec=_remaining(deadline))
+        with _feature_stage("probe", telemetry, job, deadline, stage_budget) as stage:
+            media = probe(src, timeout_sec=stage.remaining())
+            stage.check()
         telemetry.frames_decoded = media.frame_count
         telemetry.decoded_pixels = decoded_pixel_count(media)
         enforce_limits(media, settings)
+        if request.canonicalize:
+            dest = Path(tmp) / "canonical.mp4"
+            with _feature_stage("canonicalize", telemetry, job, deadline, stage_budget) as stage:
+                media = canonicalize(
+                    src,
+                    dest,
+                    timeout_sec=stage.remaining(),
+                    preserve_audio=preserve_audio,
+                )
+                work = dest
+                stage.check()
+            telemetry.frames_decoded = media.frame_count
+            telemetry.decoded_pixels = decoded_pixel_count(media)
+            enforce_limits(media, settings)
         if request.analysisResolution:
             analysis_width = request.analysisResolution.width
             analysis_height = request.analysisResolution.height
@@ -384,7 +422,7 @@ def run_analyze(
         ):
             with _feature_stage(
                 "upload_canonical", telemetry, job, deadline, stage_budget
-            ) as cancel_check:
+            ) as stage:
                 grant = request.outputGrants.canonicalMp4
                 artifact_bytes = work.read_bytes()
                 artifact = upload_artifact(
@@ -395,9 +433,9 @@ def run_analyze(
                     mime_type="video/mp4",
                     timeout_sec=min(
                         settings.media_analysis_download_timeout_sec,
-                        _remaining(deadline),
+                        stage.remaining(),
                     ),
-                    cancel_check=cancel_check,
+                    cancel_check=stage,
                 )
                 telemetry.bytes_uploaded += int(artifact["byteCount"])
             result["canonicalMedia"].update(artifact)
@@ -451,7 +489,7 @@ def _compute(
     if "shots" in requested_set:
         with _feature_stage("shots", telemetry, job, deadline, stage_budget) as stage_check:
             try:
-                internal_shots = analyze_shots(path, media)
+                internal_shots = analyze_shots(path, media, cancel_check=stage_check)
                 stage_check()
                 body["shots"] = internal_shots
                 capabilities["shots"] = {
@@ -468,8 +506,11 @@ def _compute(
     elif prior_shots is not None and needs_shot_timeline:
         internal_shots = prior_shots
     elif needs_shot_timeline:
-        with _feature_stage("shots_internal", telemetry, job, deadline, stage_budget):
-            internal_shots = analyze_shots(path, media)
+        with _feature_stage(
+            "shots_internal", telemetry, job, deadline, stage_budget
+        ) as stage_check:
+            internal_shots = analyze_shots(path, media, cancel_check=stage_check)
+            stage_check()
 
     if "subjects" in requested_set:
         with _feature_stage("subjects", telemetry, job, deadline, stage_budget) as stage_check:
@@ -719,7 +760,7 @@ def _compute(
                                 mime_type=THUMBNAIL_MIME_TYPE,
                                 timeout_sec=min(
                                     settings.media_analysis_download_timeout_sec,
-                                    _remaining(deadline),
+                                    stage_check.remaining(),
                                 ),
                                 cancel_check=stage_check,
                             )
@@ -761,7 +802,7 @@ def _compute(
                 source_duration_sec=media.duration,
                 source_sample_rate=media.audio_sample_rate,
                 source_channel_count=media.audio_channel_count,
-                timeout_sec=_remaining(deadline),
+                timeout_sec=stage_check.remaining(),
                 cancel_check=stage_check,
             )
         vad_session = _resolve_vad_session(runtime, manifest, settings)
@@ -775,7 +816,7 @@ def _compute(
                         fps=fps,
                         vad_session=vad_session,
                         require_vad=True,
-                        timeout_sec=_remaining(deadline),
+                        timeout_sec=stage_check.remaining(),
                         cancel_check=stage_check,
                     )
                     body["audio"] = audio.to_payload()
@@ -965,15 +1006,22 @@ def _compute_matte(
         height=media.height,
     )
 
-    def upload_matte(body_bytes: bytes, content_type: str, grant: Any) -> None:
+    def upload_matte(
+        body_bytes: bytes,
+        content_type: str,
+        grant: Any,
+        *,
+        timeout_sec: float,
+        cancel: Any,
+    ) -> None:
         upload_artifact(
             body_bytes,
             grant.signed_put_url,
             settings=settings,
             expires_at=grant.expires_at,
             mime_type=content_type,
-            timeout_sec=min(settings.media_analysis_download_timeout_sec, _remaining(deadline)),
-            cancel_check=cancel_check,
+            timeout_sec=min(settings.media_analysis_download_timeout_sec, timeout_sec),
+            cancel_check=cancel,
         )
 
     try:
@@ -988,7 +1036,13 @@ def _compute_matte(
                         yield index, frame_access.read_bgr(index)
 
                 def upload_timed(body_bytes: bytes, content_type: str, grant: Any) -> None:
-                    upload_matte(body_bytes, content_type, grant)
+                    upload_matte(
+                        body_bytes,
+                        content_type,
+                        grant,
+                        timeout_sec=stage_check.remaining(),
+                        cancel=stage_check,
+                    )
                     telemetry.bytes_uploaded += len(body_bytes)
 
                 candidate = run_person_matte_stage1(
@@ -1001,7 +1055,7 @@ def _compute_matte(
                     upload=upload_timed,
                     work_dir=work_dir,
                     cancel_check=stage_check,
-                    deadline=deadline,
+                    deadline=min(deadline, stage_check.stage_deadline),
                 )
         body["personMatte"] = candidate.as_dict()
         capabilities["person_matte"] = {

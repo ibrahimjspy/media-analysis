@@ -94,6 +94,6 @@ def test_prod_real_models_run_generated_goldens(
 
     assert vfr.json()["canonicalMedia"]["fps"] == {"numerator": 30, "denominator": 1}
     assert speech.json()["canonicalMedia"]["hasAudio"] is True
-    assert speech.json()["audio"]["hasSpeech"] in {True, False}
+    assert len(speech.json()["audio"]["speech"]) > 0
     # Recall thresholds are not calibrated yet; the clip must remain measurable.
     assert "reservedRegions" in ocr.json()

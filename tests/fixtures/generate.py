@@ -7,6 +7,7 @@ may be regenerated on any machine with ffmpeg.
 from __future__ import annotations
 
 import subprocess
+import wave
 from pathlib import Path
 
 import numpy as np
@@ -163,9 +164,68 @@ def write_ocr_text_mp4(path: Path, *, text: str = "HELLO WORLD", seconds: float 
     return path
 
 
+def _synthetic_speech(seconds: float, *, sample_rate: int = 16_000) -> np.ndarray:
+    """Generate a deterministic voiced formant sequence without external speech assets."""
+    rng = np.random.default_rng(7)
+    phonemes: tuple[tuple[float, tuple[int, int, int] | None], ...] = (
+        (0.22, (730, 1090, 2440)),
+        (0.18, (270, 2290, 3010)),
+        (0.24, (530, 1840, 2480)),
+        (0.16, None),
+        (0.25, (570, 840, 2410)),
+        (0.22, (300, 870, 2240)),
+        (0.25, (660, 1720, 2410)),
+        (0.18, None),
+        (0.28, (400, 2000, 2550)),
+    )
+    duration_scale = seconds / sum(duration for duration, _ in phonemes)
+    chunks: list[np.ndarray] = []
+    phase = 0.0
+    for index, (raw_duration, formants) in enumerate(phonemes):
+        duration = raw_duration * duration_scale
+        sample_count = max(1, round(sample_rate * duration))
+        time = np.arange(sample_count, dtype=np.float64) / sample_rate
+        attack = max(0.005, min(0.025, duration * 0.12))
+        release = max(0.005, min(0.035, duration * 0.18))
+        envelope = np.minimum(1.0, time / attack) * np.minimum(
+            1.0, np.maximum(0.0, duration - time) / release
+        )
+        if formants is None:
+            chunk = rng.normal(0.0, 0.12, sample_count) * envelope
+        else:
+            fundamental = 115.0 + 18.0 * np.sin(2.0 * np.pi * 0.7 * time + index)
+            phase_values = phase + 2.0 * np.pi * np.cumsum(fundamental) / sample_rate
+            phase = float(phase_values[-1] % (2.0 * np.pi))
+            chunk = np.zeros(sample_count, dtype=np.float64)
+            for harmonic in range(1, 45):
+                frequency = harmonic * 130.0
+                gain = sum(
+                    np.exp(-0.5 * ((frequency - formant) / (110.0 + 0.05 * formant)) ** 2)
+                    for formant in formants
+                )
+                chunk += gain / harmonic**0.8 * np.sin(harmonic * phase_values)
+            chunk += rng.normal(0.0, 0.015, sample_count)
+            chunk *= envelope
+            chunk *= 0.35 / max(float(np.max(np.abs(chunk))), 1e-8)
+        chunks.append(chunk.astype(np.float32))
+
+    target_count = max(1, round(sample_rate * seconds))
+    samples = np.concatenate(chunks)
+    return np.pad(samples[:target_count], (0, max(0, target_count - samples.size)))
+
+
 def write_speech_tone_mp4(path: Path, *, seconds: float = 1.0) -> Path:
-    """Spoken-audio stand-in: a 440 Hz tone over a silent-looking frame."""
+    """Mux deterministic speech-like formants over a silent-looking frame."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    sample_rate = 16_000
+    samples = _synthetic_speech(seconds, sample_rate=sample_rate)
+    wav_path = path.with_suffix(".speech.wav")
+    pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2")
+    with wave.open(str(wav_path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(pcm.tobytes())
     _run(
         [
             "ffmpeg",
@@ -174,16 +234,16 @@ def write_speech_tone_mp4(path: Path, *, seconds: float = 1.0) -> Path:
             "lavfi",
             "-i",
             f"color=c=black:s=320x240:d={seconds}:r=30",
-            "-f",
-            "lavfi",
             "-i",
-            f"sine=frequency=440:sample_rate=48000:duration={seconds}",
+            str(wav_path),
             "-c:v",
             "libx264",
             "-pix_fmt",
             "yuv420p",
             "-c:a",
             "aac",
+            "-ar",
+            "48000",
             "-shortest",
             str(path),
         ]

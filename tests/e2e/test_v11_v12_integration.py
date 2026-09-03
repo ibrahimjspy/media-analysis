@@ -169,7 +169,10 @@ def test_fresh_per_shot_feature_runs_internal_shot_detection(
 ) -> None:
     monkeypatch.setattr(
         "media_analysis.analyze.analyze_shots",
-        lambda _path, _media: [_shot(0, 15), _shot(15, 30)],
+        lambda _path, _media, *, cancel_check: [
+            _shot(0, 15),
+            _shot(15, 30),
+        ],
     )
     response = client.post(
         "/analyze",

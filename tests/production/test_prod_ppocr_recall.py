@@ -72,5 +72,9 @@ def test_prod_real_ocr_pipeline_recalls_top_banner_text(
         )
     assert response.status_code == 200, response.text
     regions = response.json()["reservedRegions"]
-    predicted = [sample["box"] for region in regions for sample in region.get("samples", [])]
+    predicted = [
+        samples[-1]["box"]
+        for region in regions
+        if (samples := region.get("samples", []))
+    ]
     assert_recall_floors(predicted, [expected])

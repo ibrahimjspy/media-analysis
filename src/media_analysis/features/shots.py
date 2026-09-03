@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from media_analysis.decode import ProbedMedia
@@ -28,10 +30,15 @@ def analyze_shots(
     media: ProbedMedia,
     *,
     person_count: int | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> list[dict]:
-    boundaries = _detect_boundaries(path, media)
+    if cancel_check:
+        cancel_check()
+    boundaries = _detect_boundaries(path, media, cancel_check=cancel_check)
     shots: list[dict] = []
     for index, (start, end, kind, score) in enumerate(boundaries):
+        if cancel_check:
+            cancel_check()
         length = duration_sec(end - start, media.fps)
         label, class_score, score_type = _classify(person_count, length)
         if index == 0 and kind == "hard_cut":
@@ -52,6 +59,8 @@ def analyze_shots(
         )
     if shots:
         shots[-1]["boundaryKind"] = "end" if len(shots) == 1 else shots[-1]["boundaryKind"]
+    if cancel_check:
+        cancel_check()
     return shots
 
 
@@ -79,7 +88,12 @@ def classify_shots_with_subjects(
         shot["scoreType"] = score_type
 
 
-def _detect_boundaries(path: Path, media: ProbedMedia) -> list[tuple[int, int, str, float]]:
+def _detect_boundaries(
+    path: Path,
+    media: ProbedMedia,
+    *,
+    cancel_check: Callable[[], None] | None = None,
+) -> list[tuple[int, int, str, float]]:
     try:
         from scenedetect import SceneManager, open_video
         from scenedetect.detectors import AdaptiveDetector, ThresholdDetector
@@ -90,7 +104,34 @@ def _detect_boundaries(path: Path, media: ProbedMedia) -> list[tuple[int, int, s
     manager = SceneManager()
     manager.add_detector(AdaptiveDetector())
     manager.add_detector(ThresholdDetector())
-    manager.detect_scenes(video)
+    stopped = threading.Event()
+    cancellation: list[Exception] = []
+
+    def monitor_cancellation() -> None:
+        while not stopped.wait(0.05):
+            try:
+                assert cancel_check is not None
+                cancel_check()
+            except Exception as exc:
+                cancellation.append(exc)
+                manager.stop()
+                return
+
+    monitor = None
+    if cancel_check:
+        cancel_check()
+        monitor = threading.Thread(target=monitor_cancellation, daemon=True)
+        monitor.start()
+    try:
+        manager.detect_scenes(video)
+    finally:
+        stopped.set()
+        if monitor:
+            monitor.join()
+    if cancellation:
+        raise cancellation[0]
+    if cancel_check:
+        cancel_check()
     scenes = manager.get_scene_list()
     if not scenes:
         return [(0, media.frame_count, "start", 1.0)]

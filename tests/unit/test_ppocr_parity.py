@@ -55,8 +55,30 @@ def test_prob_map_parity_rejects_large_drift() -> None:
 
 
 @pytest.mark.unit
+def test_prob_map_parity_rejects_nan_and_infinite_maps() -> None:
+    paddle = np.full((4, 4), 0.5, dtype=np.float32)
+    nan_map = paddle.copy()
+    nan_map[0, 0] = np.nan
+    inf_map = paddle.copy()
+    inf_map[0, 0] = np.inf
+    with pytest.raises(AssertionError, match="NaN or infinite"):
+        assert_prob_map_parity(paddle, nan_map)
+    with pytest.raises(AssertionError, match="NaN or infinite"):
+        assert_prob_map_parity(inf_map, paddle)
+
+
+@pytest.mark.unit
 def test_box_parity_requires_one_to_one_match() -> None:
     boxes = [{"x": 0.2, "y": 0.2, "width": 0.3, "height": 0.1}]
     assert_box_parity(boxes, boxes)
     with pytest.raises(AssertionError, match="1:1"):
         assert_box_parity(boxes, [])
+
+
+@pytest.mark.unit
+def test_box_parity_enforces_configured_min_iou() -> None:
+    paddle = [{"x": 0.10, "y": 0.10, "width": 0.20, "height": 0.10}]
+    onnx = [{"x": 0.13, "y": 0.10, "width": 0.20, "height": 0.10}]
+    assert_box_parity(paddle, onnx, min_iou=0.5)
+    with pytest.raises(AssertionError, match="IoU>=0.9"):
+        assert_box_parity(paddle, onnx, min_iou=0.9)

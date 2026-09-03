@@ -9,7 +9,10 @@ from media_analysis.tools.export_ppocr import load_export_lock
 from media_analysis.tools.model_lock import load_lock
 from media_analysis.tools.ppocr_parity import (
     PARITY_MAX_ABS_PROB,
+    PARITY_MIN_BOX_IOU,
+    assert_box_parity,
     assert_prob_map_parity,
+    boxes_from_prob_map,
     load_parity_reference,
 )
 from media_analysis.tools.vendor_models import vendor
@@ -44,8 +47,17 @@ def test_prod_onnx_matches_recorded_paddle_reference(
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
     onnx_prob = session.run([output_name], {input_name: reference["input"]})[0]
+    min_box_iou = float(export_lock["parity"]["minBoxIou"] or PARITY_MIN_BOX_IOU)
     assert_prob_map_parity(
         reference["paddleProb"],
         onnx_prob,
         max_abs=float(export_lock["parity"]["maxAbsProb"] or PARITY_MAX_ABS_PROB),
     )
+    onnx_boxes = boxes_from_prob_map(onnx_prob)
+    assert_box_parity(
+        boxes_from_prob_map(reference["paddleProb"]),
+        onnx_boxes,
+        min_iou=min_box_iou,
+    )
+    if reference["paddleBoxes"]:
+        assert_box_parity(reference["paddleBoxes"], onnx_boxes, min_iou=min_box_iou)

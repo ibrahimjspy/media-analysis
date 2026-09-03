@@ -2,6 +2,7 @@ import pytest
 
 from media_analysis.tools.ppocr_recall import (
     assert_recall_floors,
+    dedupe_temporal_boxes,
     render_latin_banner,
     score_detections,
 )
@@ -30,6 +31,25 @@ def test_recall_floors_fail_when_text_is_missed() -> None:
     expected = [{"x": 0.1, "y": 0.05, "width": 0.4, "height": 0.1}]
     with pytest.raises(AssertionError, match="recall"):
         assert_recall_floors([], expected)
+
+
+@pytest.mark.unit
+def test_dedupe_temporal_boxes_collapses_repeated_samples() -> None:
+    box = {"x": 0.1, "y": 0.05, "width": 0.4, "height": 0.1}
+    jitter = {"x": 0.11, "y": 0.05, "width": 0.4, "height": 0.1}
+    other = {"x": 0.7, "y": 0.05, "width": 0.2, "height": 0.1}
+    assert len(dedupe_temporal_boxes([box, box, jitter, other])) == 2
+
+
+@pytest.mark.unit
+def test_recall_precision_recovers_after_temporal_dedupe() -> None:
+    expected = [{"x": 0.1, "y": 0.05, "width": 0.4, "height": 0.1}]
+    repeated = expected * 8
+    with pytest.raises(AssertionError, match="precision"):
+        assert_recall_floors(repeated, expected)
+    scores = assert_recall_floors(dedupe_temporal_boxes(repeated), expected)
+    assert scores["precision"] == 1.0
+    assert scores["recall"] == 1.0
 
 
 @pytest.mark.unit

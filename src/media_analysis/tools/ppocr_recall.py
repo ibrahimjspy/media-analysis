@@ -7,11 +7,12 @@ from typing import Any
 import cv2
 import numpy as np
 
-from media_analysis.tools.ppocr_parity import detection_scores
+from media_analysis.tools.ppocr_parity import box_iou, detection_scores
 
 RECALL_IOU = 0.5
 RECALL_MIN = 0.8
 PRECISION_MIN = 0.5
+TEMPORAL_DEDUPE_IOU = 0.7
 RECALL_POLICY_VERSION = "ocr-recall-synthetic-1.0.0"
 DEFAULT_TEXT = "HELLO"
 
@@ -54,6 +55,20 @@ def render_latin_banner(
     if box["y"] + box["height"] > 0.20:
         raise ValueError("banner must stay inside the top 20% OCR sampler ROI")
     return image, box
+
+
+def dedupe_temporal_boxes(
+    boxes: list[dict[str, float]],
+    *,
+    iou_threshold: float = TEMPORAL_DEDUPE_IOU,
+) -> list[dict[str, float]]:
+    """Keep one box per overlapping cluster so temporal resamples do not tank precision."""
+    kept: list[dict[str, float]] = []
+    for box in boxes:
+        if any(box_iou(box, existing) >= iou_threshold for existing in kept):
+            continue
+        kept.append(box)
+    return kept
 
 
 def score_detections(

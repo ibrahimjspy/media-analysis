@@ -80,10 +80,38 @@ def detection_scores(
     }
 
 
+def _require_finite(name: str, values: np.ndarray) -> None:
+    if not np.isfinite(values).all():
+        raise AssertionError(f"{name} contains NaN or infinite values")
+
+
 def max_abs_diff(left: np.ndarray, right: np.ndarray) -> float:
     if left.shape != right.shape:
         raise ValueError(f"probability map shape mismatch: {left.shape} vs {right.shape}")
+    _require_finite("left probability map", left)
+    _require_finite("right probability map", right)
     return float(np.max(np.abs(left.astype(np.float32) - right.astype(np.float32))))
+
+
+def _spatial_hw(prob: np.ndarray) -> tuple[int, int]:
+    array = np.asarray(prob)
+    if array.ndim < 2:
+        raise ValueError(f"probability map rank {array.ndim} is too small")
+    return int(array.shape[-2]), int(array.shape[-1])
+
+
+def boxes_from_prob_map(prob: np.ndarray) -> list[dict[str, float]]:
+    from media_analysis.features.ppocr import DetPreprocessMeta, postprocess_db_map
+
+    height, width = _spatial_hw(prob)
+    meta = DetPreprocessMeta(
+        src_height=height,
+        src_width=width,
+        ratio=1.0,
+        resized_height=height,
+        resized_width=width,
+    )
+    return polygons_to_boxes(postprocess_db_map(prob, meta))
 
 
 def assert_prob_map_parity(
@@ -92,6 +120,8 @@ def assert_prob_map_parity(
     *,
     max_abs: float = PARITY_MAX_ABS_PROB,
 ) -> None:
+    _require_finite("paddle probability map", paddle_prob)
+    _require_finite("onnx probability map", onnx_prob)
     delta = max_abs_diff(paddle_prob, onnx_prob)
     if delta > max_abs:
         raise AssertionError(f"Paddle/ONNX probability map max abs {delta} exceeds {max_abs}")
