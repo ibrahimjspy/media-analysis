@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 MODNET_PREPROCESSING_VERSION = "modnet-onnx-ref512-norm127-aligned-1.1.0"
-MATTE_TEMPORAL_POLICY_VERSION = "ema-shot-reset-1.0.0"
+MATTE_TEMPORAL_POLICY_VERSION = "keyframe-backward-flow-aligned-ema-shot-reset-2.1.0"
 RGB_GUIDED_REFINEMENT_VERSION = "rgb-guided-filter-r8-eps1e-3-1.0.0"
 MATTE_ENCODING_RECIPE = "matte-h264-yuv420p-fullrange-bt709-gop15-b0-1.0.1"
 

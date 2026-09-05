@@ -22,7 +22,7 @@ from media_analysis.features.ppocr import (
 from media_analysis.frames import Rational
 
 OCR_DETECTOR_VERSION = "PP-OCRv5_mobile_det"
-OCR_SAMPLER_VERSION = "top20-bottom15-shot-burst-1000ms-1.0.0"
+OCR_SAMPLER_VERSION = "top20-bottom15-scene-keyframes-shot-burst-2.0.0"
 OCR_MERGE_VERSION = "temporal-iou-merge-per-shot-1.0.0"
 
 OCR_ERROR_INFERENCE = "OCR_INFERENCE_FAILED"
@@ -122,7 +122,7 @@ def sample_ocr_frames(
     fps: Rational,
     shots: list[dict[str, Any]] | None = None,
 ) -> list[int]:
-    """Deterministic temporal sampler: 1000ms max-gap cadence plus shot-boundary bursts."""
+    """Sample scene keyframes and cut bursts; use cadence only without a shot timeline."""
     if frame_count <= 0:
         return []
 
@@ -134,18 +134,24 @@ def sample_ocr_frames(
     if frame_count > 1:
         frames.add(frame_count - 1)
 
-    cursor = 0
-    while cursor < frame_count:
-        frames.add(cursor)
-        cursor += gap_frames
-
     if shots:
         for shot in shots:
+            start = int(shot["startFrame"])
+            end = int(shot["endFrameExclusive"])
+            if end <= start:
+                continue
+            # The shot midpoint is the stable representative/keyframe for OCR.
+            frames.add(min(frame_count - 1, start + (end - start) // 2))
             for boundary in (shot["startFrame"], shot["endFrameExclusive"] - 1):
                 for offset in range(-SHOT_BOUNDARY_BURST, SHOT_BOUNDARY_BURST + 1):
                     idx = boundary + offset
                     if 0 <= idx < frame_count:
                         frames.add(idx)
+    else:
+        cursor = 0
+        while cursor < frame_count:
+            frames.add(cursor)
+            cursor += gap_frames
 
     return sorted(frames)
 

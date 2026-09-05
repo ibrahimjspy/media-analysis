@@ -30,11 +30,20 @@ def analyze_shots(
     media: ProbedMedia,
     *,
     person_count: int | None = None,
+    frame_tap: Callable[[int, object], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> list[dict]:
     if cancel_check:
         cancel_check()
-    boundaries = _detect_boundaries(path, media, cancel_check=cancel_check)
+    if frame_tap is None:
+        boundaries = _detect_boundaries(path, media, cancel_check=cancel_check)
+    else:
+        boundaries = _detect_boundaries(
+            path,
+            media,
+            frame_tap=frame_tap,
+            cancel_check=cancel_check,
+        )
     shots: list[dict] = []
     for index, (start, end, kind, score) in enumerate(boundaries):
         if cancel_check:
@@ -92,6 +101,7 @@ def _detect_boundaries(
     path: Path,
     media: ProbedMedia,
     *,
+    frame_tap: Callable[[int, object], None] | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> list[tuple[int, int, str, float]]:
     try:
@@ -101,6 +111,8 @@ def _detect_boundaries(
         return [(0, media.frame_count, "start", 1.0)]
 
     video = open_video(str(path))
+    if frame_tap is not None:
+        video = _TappingVideoStream(video, frame_tap)
     manager = SceneManager()
     manager.add_detector(AdaptiveDetector())
     manager.add_detector(ThresholdDetector())
@@ -151,3 +163,20 @@ def _detect_boundaries(
         last = out[-1]
         out[-1] = (last[0], media.frame_count, last[2], last[3])
     return out
+
+
+class _TappingVideoStream:
+    """Duck-typed PySceneDetect stream that exposes each decoded frame once."""
+
+    def __init__(self, stream: object, tap: Callable[[int, object], None]) -> None:
+        self._stream = stream
+        self._tap = tap
+
+    def read(self, decode: bool = True, advance: bool = True):
+        frame = self._stream.read(decode=decode, advance=advance)
+        if decode and frame is not False:
+            self._tap(self._stream.position.frame_num, frame)
+        return frame
+
+    def __getattr__(self, name: str):
+        return getattr(self._stream, name)

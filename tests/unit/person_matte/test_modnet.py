@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from tests.unit.person_matte.fake_ort import FakeModnetSession
@@ -8,6 +11,7 @@ from media_analysis.errors import INVALID_REQUEST, AnalyzeError
 from media_analysis.person_matte.modnet import (
     compute_modnet_input_size,
     infer_modnet_alpha,
+    load_modnet_session,
     postprocess_modnet,
     preprocess_modnet,
 )
@@ -67,3 +71,80 @@ def test_infer_modnet_alpha_end_to_end() -> None:
     alpha = infer_modnet_alpha(FakeModnetSession(), frame)
     assert alpha.shape == (32, 32)
     assert alpha.max() == 0
+
+
+@pytest.mark.unit
+def test_modnet_prefers_tensorrt_with_fp16(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    class SessionOptions:
+        intra_op_num_threads = 0
+
+    def inference_session(path, *, sess_options, providers):
+        captured.update(path=path, options=sess_options, providers=providers)
+        return SimpleNamespace(
+            get_providers=lambda: ["TensorrtExecutionProvider", "CUDAExecutionProvider"],
+            disable_fallback=lambda: captured.update(fallback_disabled=True),
+        )
+
+    fake_ort = SimpleNamespace(
+        SessionOptions=SessionOptions,
+        get_available_providers=lambda: [
+            "TensorrtExecutionProvider",
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ],
+        InferenceSession=inference_session,
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    model = tmp_path / "modnet.onnx"
+    model.write_bytes(b"model")
+
+    load_modnet_session(
+        model,
+        execution_provider="tensorrt",
+        engine_cache_dir=tmp_path / "trt-cache",
+    )
+
+    provider, options = captured["providers"][0]
+    assert provider == "TensorrtExecutionProvider"
+    assert options["trt_fp16_enable"] is True
+    assert options["trt_engine_cache_path"] == str(tmp_path / "trt-cache")
+    assert captured["fallback_disabled"] is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("advertised", [False, True])
+def test_explicit_tensorrt_rejects_cuda_fallback(tmp_path, monkeypatch, advertised) -> None:
+    available = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    if advertised:
+        available.insert(0, "TensorrtExecutionProvider")
+    fake_ort = SimpleNamespace(
+        SessionOptions=lambda: SimpleNamespace(),
+        get_available_providers=lambda: available,
+        InferenceSession=lambda *args, **kwargs: SimpleNamespace(
+            get_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    model = tmp_path / "modnet.onnx"
+    model.write_bytes(b"model")
+    with pytest.raises(RuntimeError, match="requested tensorrt"):
+        load_modnet_session(
+            model,
+            execution_provider="tensorrt",
+            engine_cache_dir=tmp_path / "engines",
+        )
+
+
+@pytest.mark.unit
+def test_requested_gpu_provider_must_be_available(tmp_path, monkeypatch) -> None:
+    fake_ort = SimpleNamespace(
+        SessionOptions=lambda: SimpleNamespace(intra_op_num_threads=0),
+        get_available_providers=lambda: ["CPUExecutionProvider"],
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    model = tmp_path / "modnet.onnx"
+    model.write_bytes(b"model")
+    with pytest.raises(RuntimeError, match="unavailable"):
+        load_modnet_session(model, execution_provider="cuda")

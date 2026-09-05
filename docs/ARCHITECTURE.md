@@ -21,10 +21,13 @@ flowchart LR
 
 ## Process boundaries
 
-The `analysis-cpu` image owns subjects, faces, OCR regions, shots, motion,
-quality, audio, waveform, exposure, and thumbnails. The `matte-cpu` image is a
-separate v2 reference worker so heavy segmentation dependencies and production
-gates cannot silently affect the CPU analysis worker.
+The `analysis-cpu` image supports three runtime roles. `general` owns subjects,
+faces, shots, motion, quality, audio, waveform, exposure, and thumbnails;
+`ocr` owns OCR (and optional shot detection); `combined` preserves the local and
+backward-compatible single-service mode. Production should route OCR-only jobs
+to `ocr` replicas and all other CPU jobs to `general` replicas so model sessions
+do not compete for CPU or RAM. The `matte-cpu` image remains a separate reference
+worker.
 
 One process handles one active analysis at a time until load benchmarks justify
 more concurrency. The process-local replay cache is bounded and is not a durable
@@ -39,10 +42,32 @@ intervals use half-open ranges, and all normalized geometry refers to the
 canonical dimensions. This avoids source VFR timestamp ambiguity and lets
 independent features share one coordinate system.
 
-Frame access uses bounded caching rather than retaining a full video in memory.
+All sampled visual consumers use one thread-safe, byte-bounded frame cache per
+request. Concurrent requests for the same frame are coalesced into one decode;
+motion uses a downscaled grayscale view, while exposure uses a bounded color
+view. OCR samples shot keyframes and cut bursts, face/person detectors run on a
+periodic cadence and tracking fills the gaps. Frame access remains bounded rather
+than retaining a full video in memory.
+Evicted samples spill losslessly to a per-job temporary directory, capped by
+`MEDIA_ANALYSIS_FRAME_SPILL_BYTES` (2 GiB by default). Later consumers reuse these
+samples without decoding them again. If the disk budget is exhausted, further
+samples use the bounded memory cache and `frameSpillLimited` reports the fallback.
+Scene detection still owns a sequential scan, with compact gray samples retained
+for motion/quality. This is shared sample reuse, not a guarantee that every frame
+of the source bitstream is decoded only once.
 Audio extraction produces canonical mono 16 kHz float32 PCM. Person-matte
-encoding streams grayscale frames to ffmpeg and validates contiguous frame
-indices.
+inference runs on shot-reset keyframes and propagates alpha between them with
+optical flow; encoding still streams grayscale frames to ffmpeg and validates
+contiguous frame indices.
+
+Independent OCR, audio, and general visual paths overlap in a bounded per-job
+worker pool. Source bytes, canonical proxies, and JSON-only analysis results are
+content-addressed by `source.sha256`, TTL-bound, and LRU-pruned. Signed URLs are
+never cache keys, and cache hits still enforce URL and expiry policy.
+Only completed analysis results are reused. Active jobs keep their own media
+paths (hard links when possible), so TTL/LRU eviction cannot remove their input
+before decode or upload. Cache publication and checkout coordinate across local
+processes using a filesystem lock.
 
 ## Feature isolation
 
@@ -62,6 +87,12 @@ Models are never downloaded on the first request. Build or setup tooling reads
 `models/manifest.lock.json`, downloads immutable artifacts, verifies byte size
 and SHA-256, and writes the runtime manifest. Startup then verifies and warms
 every model required by the selected image.
+
+MODNet runtime selection supports TensorRT, CUDA, and CPU. The TensorRT provider
+enables FP16 engine building and caching. A production matte deployment must set
+`MEDIA_ANALYSIS_MATTE_EXECUTION_PROVIDER=tensorrt`; startup fails if the requested
+GPU provider is unavailable. The checked-in matte artifact gate remains closed
+until an owned immutable MODNet export passes the existing production gates.
 
 Mechanical readiness and production readiness are separate:
 

@@ -3,12 +3,14 @@ from __future__ import annotations
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
 from media_analysis import __version__
 from media_analysis.build_provenance import analyze_build_provenance
+from media_analysis.cache import LocalMediaCache, get_local_media_cache
 from media_analysis.config import IMPLEMENTED_CPU, MATTE_FEATURES, Settings
 from media_analysis.decode import (
     DECODE_PIPELINE_VERSION,
@@ -22,6 +24,7 @@ from media_analysis.errors import (
     CANCELLED,
     FEATURE_UNAVAILABLE,
     INVALID_REQUEST,
+    LIMIT_EXCEEDED,
     MODEL_NOT_READY,
     TIMEOUT,
     AnalyzeError,
@@ -88,7 +91,7 @@ from media_analysis.features.waveform import (
     waveform_capability,
 )
 from media_analysis.features.yunet import YUNET_PREPROCESSING_VERSION
-from media_analysis.frame_access import BoundedFrameAccess
+from media_analysis.frame_access import BoundedFrameAccess, FrameAccessConfig
 from media_analysis.frames import Rational, analysis_transform, duration_sec
 from media_analysis.jobs import Job
 from media_analysis.models_manifest import SILERO_VAD_MODEL_NAME
@@ -96,9 +99,10 @@ from media_analysis.person_matte.constants import MATTE_TEMPORAL_POLICY_VERSION
 from media_analysis.person_matte.pipeline import run_person_matte_stage1
 from media_analysis.person_matte.provenance import matte_provenance_block
 from media_analysis.person_matte.types import CanonicalMediaSpec
+from media_analysis.request_hash import request_hash
 from media_analysis.runtime import RuntimeState
 from media_analysis.schemas import AnalyzeRequest
-from media_analysis.source import fetch_source
+from media_analysis.source import assert_fetch_url, assert_source_fresh, fetch_source_to_path
 from media_analysis.telemetry import JobTelemetry
 from media_analysis.tools.model_lock import load_lock
 from media_analysis.upload import upload_artifact
@@ -200,6 +204,18 @@ def validate_features(features: list[str], settings: Settings) -> None:
             raise AnalyzeError(
                 FEATURE_UNAVAILABLE,
                 "matte image does not substitute for analysis-cpu features",
+            )
+    if settings.worker_role == "general" and "ocr" in features:
+        raise AnalyzeError(
+            FEATURE_UNAVAILABLE,
+            "ocr is served by a dedicated OCR worker",
+        )
+    if settings.worker_role == "ocr":
+        unsupported = set(features) - {"ocr", "shots"}
+        if unsupported:
+            raise AnalyzeError(
+                FEATURE_UNAVAILABLE,
+                "OCR worker only serves ocr and shots",
             )
     unimplemented = [
         name for name in features if name not in IMPLEMENTED_CPU and name not in MATTE_FEATURES
@@ -349,21 +365,55 @@ def run_analyze(
     telemetry = JobTelemetry()
     _check_job(job, deadline)
     stage_budget = settings.media_analysis_stage_timeout_sec
-
-    with _feature_stage("download", telemetry, job, deadline, stage_budget) as stage:
-        payload = fetch_source(
-            request.source.signedGetUrl,
-            settings=settings,
-            expires_at=request.source.expiresAt,
-            expected_sha256=request.source.sha256,
-            timeout_sec=min(settings.media_analysis_download_timeout_sec, stage.remaining()),
-            cancel_check=stage,
-        )
-        telemetry.bytes_downloaded = len(payload)
+    media_cache = get_local_media_cache(
+        settings.media_analysis_cache_dir,
+        max_bytes=settings.media_analysis_cache_max_bytes,
+        ttl_sec=settings.media_analysis_cache_ttl_sec,
+        enabled=settings.media_analysis_cache_enabled,
+    )
+    declared_fingerprint = (
+        request.source.sha256.lower() if request.source.sha256 is not None else None
+    )
 
     with tempfile.TemporaryDirectory(prefix="media-analysis-") as tmp:
         src = Path(tmp) / "source.bin"
-        src.write_bytes(payload)
+        with _feature_stage("download", telemetry, job, deadline, stage_budget) as stage:
+            cached_source = (
+                media_cache.get("source", declared_fingerprint, suffix=".media", dest=src)
+                if declared_fingerprint is not None
+                else None
+            )
+            if cached_source is not None:
+                # Cache hits still honor the signed request's freshness and URL policy.
+                assert_source_fresh(request.source.expiresAt)
+                assert_fetch_url(request.source.signedGetUrl, settings)
+                if cached_source.byte_count > settings.media_analysis_max_bytes:
+                    raise AnalyzeError(LIMIT_EXCEEDED, "Source exceeds MEDIA_ANALYSIS_MAX_BYTES")
+                src = cached_source.path
+                fingerprint = declared_fingerprint
+                telemetry.source_cache_hit = True
+            else:
+                downloaded = fetch_source_to_path(
+                    request.source.signedGetUrl,
+                    src,
+                    settings=settings,
+                    expires_at=request.source.expiresAt,
+                    expected_sha256=declared_fingerprint,
+                    timeout_sec=min(
+                        settings.media_analysis_download_timeout_sec,
+                        stage.remaining(),
+                    ),
+                    cancel_check=stage,
+                )
+                telemetry.bytes_downloaded = downloaded.byte_count
+                fingerprint = downloaded.sha256
+                if declared_fingerprint is not None:
+                    media_cache.put_file(
+                        "source",
+                        declared_fingerprint,
+                        src,
+                        suffix=".media",
+                    )
         work = src
         preserve_audio = needs_canonical_audio(
             canonicalize=request.canonicalize,
@@ -378,13 +428,35 @@ def run_analyze(
         if request.canonicalize:
             dest = Path(tmp) / "canonical.mp4"
             with _feature_stage("canonicalize", telemetry, job, deadline, stage_budget) as stage:
-                media = canonicalize(
-                    src,
-                    dest,
-                    timeout_sec=stage.remaining(),
-                    preserve_audio=preserve_audio,
+                canonical_key = LocalMediaCache.stable_key(
+                    fingerprint,
+                    DECODE_PIPELINE_VERSION,
+                    "audio" if preserve_audio else "video-only",
                 )
-                work = dest
+                cached_canonical = (
+                    media_cache.get("canonical", canonical_key, suffix=".mp4", dest=dest)
+                    if declared_fingerprint is not None
+                    else None
+                )
+                if cached_canonical is not None:
+                    work = cached_canonical.path
+                    media = probe(work, timeout_sec=stage.remaining())
+                    telemetry.canonical_cache_hit = True
+                else:
+                    media = canonicalize(
+                        src,
+                        dest,
+                        timeout_sec=stage.remaining(),
+                        preserve_audio=preserve_audio,
+                    )
+                    work = dest
+                    if declared_fingerprint is not None:
+                        media_cache.put_file(
+                            "canonical",
+                            canonical_key,
+                            dest,
+                            suffix=".mp4",
+                        )
                 stage.check()
             telemetry.frames_decoded = media.frame_count
             telemetry.decoded_pixels = decoded_pixel_count(media)
@@ -404,17 +476,33 @@ def run_analyze(
                     INVALID_REQUEST,
                     "analysisResolution must preserve canonical aspect ratio",
                 )
-        result = _compute(
-            request,
-            media,
-            work,
-            runtime,
-            settings,
-            job,
-            deadline,
-            work_dir=Path(tmp),
-            telemetry=telemetry,
+        result_key = _result_cache_key(request, runtime, settings, fingerprint)
+        cacheable_result = media_cache.enabled and declared_fingerprint is not None and not (
+            set(request.features) & {"thumbnails", "person_matte"}
         )
+        cached_result = (
+            media_cache.get_json("result", result_key) if cacheable_result else None
+        )
+        if cached_result is not None and cached_result.get("overallStatus") != "completed":
+            cached_result = None
+        if cached_result is not None:
+            result = cached_result
+            result["requestedFeatures"] = list(request.features)
+            telemetry.result_cache_hit = True
+        else:
+            result = _compute(
+                request,
+                media,
+                work,
+                runtime,
+                settings,
+                job,
+                deadline,
+                work_dir=Path(tmp),
+                telemetry=telemetry,
+            )
+            if cacheable_result and result.get("overallStatus") == "completed":
+                media_cache.put_json("result", result_key, result)
         if (
             request.canonicalize
             and request.outputGrants is not None
@@ -437,10 +525,177 @@ def run_analyze(
                     ),
                     cancel_check=stage,
                 )
-                telemetry.bytes_uploaded += int(artifact["byteCount"])
+                telemetry.add_uploaded_bytes(int(artifact["byteCount"]))
             result["canonicalMedia"].update(artifact)
         result["telemetry"] = telemetry.as_dict()
         return result
+
+
+def _result_cache_key(
+    request: AnalyzeRequest,
+    runtime: RuntimeState,
+    settings: Settings,
+    media_fingerprint: str,
+) -> str:
+    model_identity = ",".join(
+        f"{entry.name}:{entry.sha256}"
+        for entry in sorted(runtime.manifest.entries, key=lambda item: item.name)
+    )
+    return LocalMediaCache.stable_key(
+        media_fingerprint,
+        request_hash(request.model_dump(mode="python", by_alias=True)),
+        __version__,
+        "analysis-cache-v2",
+        DECODE_PIPELINE_VERSION,
+        OCR_SAMPLER_VERSION,
+        MOTION_ANALYZER_VERSION,
+        QUALITY_POLICY_VERSION,
+        EXPOSURE_ANALYZER_VERSION,
+        model_identity,
+        f"motion-max-dimension:{settings.media_analysis_motion_max_dimension}",
+        f"matte-keyframe-interval:{settings.media_analysis_matte_keyframe_interval}",
+    )
+
+
+FeatureOutcome = tuple[dict[str, Any], dict[str, Any], list[str]]
+
+
+def _run_ocr_feature(
+    *,
+    path: Path,
+    media: Any,
+    shots: list[dict[str, Any]] | None,
+    runtime: RuntimeState,
+    settings: Settings,
+    job: Job,
+    deadline: float,
+    telemetry: JobTelemetry,
+    frame_access: BoundedFrameAccess,
+) -> FeatureOutcome:
+    body: dict[str, Any] = {}
+    capabilities: dict[str, Any] = {}
+    warnings: list[str] = []
+    with _feature_stage(
+        "ocr",
+        telemetry,
+        job,
+        deadline,
+        settings.media_analysis_stage_timeout_sec,
+    ) as stage_check:
+        entry = runtime.manifest.by_name("PP-OCRv5_mobile_det")
+        try:
+            if entry is None:
+                raise RuntimeError("OCR model is absent")
+            if entry.stub:
+                regions: list[dict[str, Any]] = []
+                ocr_status = "completed"
+            else:
+                if runtime.ocr_session is None:
+                    raise RuntimeError("OCR runtime is unavailable")
+                result = analyze_ocr(
+                    path,
+                    media,
+                    shots=shots,
+                    model_path=settings.media_analysis_model_dir / entry.file,
+                    session=runtime.ocr_session,
+                    frame_provider=lambda _path, index: frame_access.read_bgr(index),
+                    cancel_check=stage_check,
+                )
+                regions = result.regions
+                ocr_status = result.status
+            if ocr_status == "failed":
+                capabilities["ocr"] = {
+                    "status": "failed",
+                    "version": OCR_DETECTOR_VERSION,
+                    "warningCodes": ["OCR_UNAVAILABLE"],
+                }
+                warnings.append("OCR_UNAVAILABLE")
+            else:
+                body["reservedRegions"] = regions
+                capabilities["ocr"] = {
+                    "status": "completed",
+                    "version": OCR_DETECTOR_VERSION,
+                }
+                if not regions:
+                    warnings.append("OCR_EMPTY")
+        except AnalyzeError:
+            raise
+        except Exception:
+            capabilities["ocr"] = {
+                "status": "failed",
+                "version": OCR_DETECTOR_VERSION,
+                "warningCodes": ["OCR_UNAVAILABLE"],
+            }
+            warnings.append("OCR_UNAVAILABLE")
+    return body, capabilities, warnings
+
+
+def _run_audio_features(
+    *,
+    requested_set: set[str],
+    path: Path,
+    media: Any,
+    runtime: RuntimeState,
+    settings: Settings,
+    job: Job,
+    deadline: float,
+    telemetry: JobTelemetry,
+) -> FeatureOutcome:
+    body: dict[str, Any] = {}
+    capabilities: dict[str, Any] = {}
+    warnings: list[str] = []
+    stage_budget = settings.media_analysis_stage_timeout_sec
+    with _feature_stage("pcm", telemetry, job, deadline, stage_budget) as stage_check:
+        shared_pcm = extract_analysis_pcm(
+            path,
+            has_audio=media.has_audio,
+            source_duration_sec=media.duration,
+            source_sample_rate=media.audio_sample_rate,
+            source_channel_count=media.audio_channel_count,
+            timeout_sec=stage_check.remaining(),
+            cancel_check=stage_check,
+        )
+    vad_session = _resolve_vad_session(runtime, runtime.manifest, settings)
+
+    if "audio" in requested_set:
+        with _feature_stage("audio", telemetry, job, deadline, stage_budget) as stage_check:
+            try:
+                audio = analyze_audio(
+                    shared_pcm,
+                    source_path=path if media.has_audio else None,
+                    fps=media.fps,
+                    vad_session=vad_session,
+                    require_vad=True,
+                    timeout_sec=stage_check.remaining(),
+                    cancel_check=stage_check,
+                )
+                body["audio"] = audio.to_payload()
+                audio_warnings = list(audio.warning_codes)
+                warnings.extend(audio_warnings)
+                capabilities["audio"] = audio_capability(
+                    status=audio.status,
+                    warning_codes=audio_warnings or None,
+                )
+            except AnalyzeError:
+                raise
+            except Exception:
+                capabilities["audio"] = audio_capability(status="failed")
+
+    if "waveform" in requested_set:
+        with _feature_stage("waveform", telemetry, job, deadline, stage_budget):
+            try:
+                waveform_payload, waveform_warnings = analyze_waveform(shared_pcm)
+                body["waveform"] = waveform_payload
+                warnings.extend(waveform_warnings)
+                capabilities["waveform"] = waveform_capability(
+                    status="completed",
+                    warning_codes=waveform_warnings or None,
+                )
+            except AnalyzeError:
+                raise
+            except Exception:
+                capabilities["waveform"] = waveform_capability(status="failed")
+    return body, capabilities, warnings
 
 
 def _compute(
@@ -468,6 +723,74 @@ def _compute(
             telemetry,
         )
 
+    with BoundedFrameAccess(
+        path,
+        config=FrameAccessConfig(
+            max_cached_bytes=settings.media_analysis_frame_cache_bytes,
+            max_spill_bytes=settings.media_analysis_frame_spill_bytes,
+        ),
+        cancel_check=lambda: _check_job(job, deadline),
+    ) as frame_access:
+        result = _compute_cpu(
+            request,
+            media,
+            path,
+            runtime,
+            settings,
+            job,
+            deadline,
+            telemetry=telemetry,
+            frame_access=frame_access,
+        )
+        telemetry.unique_frames_decoded = frame_access.unique_decodes
+        telemetry.frame_cache_hits = frame_access.cache_hits
+        telemetry.frame_disk_hits = frame_access.disk_hits
+        telemetry.frame_spill_bytes = frame_access.spill_bytes
+        telemetry.frame_spill_limited = frame_access.spill_limited
+        telemetry.record_stage("decode", frame_access.decode_duration_ms)
+        return result
+
+
+def _compute_cpu(
+    request: AnalyzeRequest,
+    media: Any,
+    path: Path,
+    runtime: RuntimeState,
+    settings: Settings,
+    job: Job,
+    deadline: float,
+    *,
+    telemetry: JobTelemetry,
+    frame_access: BoundedFrameAccess,
+) -> dict[str, Any]:
+    # Signal cooperative cancellation before ExitStack joins the background work.
+    # The caller can only release frame access, media files, and model ownership
+    # once every worker has stopped, including when a foreground feature fails.
+    with ExitStack() as resources:
+        try:
+            return _compute_cpu_inner(
+                request, media, path, runtime, settings, job, deadline,
+                telemetry=telemetry, frame_access=frame_access, resources=resources,
+            )
+        except BaseException:
+            job.cancel.set()
+            raise
+
+
+def _compute_cpu_inner(
+    request: AnalyzeRequest,
+    media: Any,
+    path: Path,
+    runtime: RuntimeState,
+    settings: Settings,
+    job: Job,
+    deadline: float,
+    *,
+    telemetry: JobTelemetry,
+    frame_access: BoundedFrameAccess,
+    resources: ExitStack,
+) -> dict[str, Any]:
+
     manifest = runtime.manifest
     fps = media.fps
     requested = list(request.features)
@@ -486,10 +809,31 @@ def _compute(
 
     needs_shot_timeline = bool(SHOT_TIMELINE_FEATURES & requested_set) or prior_shots is not None
 
+    def retain_decode_sample(frame_index: int, frame: object) -> None:
+        if not ({"motion", "quality"} & requested_set):
+            return
+        if frame_index % 2 != 0 and frame_index != media.frame_count - 1:
+            return
+        frame_access.prime_gray(
+            frame_index,
+            frame,
+            max_dimension=settings.media_analysis_motion_max_dimension,
+        )
+
+    def analyze_shot_timeline(stage_check: StageDeadline) -> list[dict[str, Any]]:
+        if {"motion", "quality"} & requested_set:
+            return analyze_shots(
+                path,
+                media,
+                frame_tap=retain_decode_sample,
+                cancel_check=stage_check,
+            )
+        return analyze_shots(path, media, cancel_check=stage_check)
+
     if "shots" in requested_set:
         with _feature_stage("shots", telemetry, job, deadline, stage_budget) as stage_check:
             try:
-                internal_shots = analyze_shots(path, media, cancel_check=stage_check)
+                internal_shots = analyze_shot_timeline(stage_check)
                 stage_check()
                 body["shots"] = internal_shots
                 capabilities["shots"] = {
@@ -509,8 +853,57 @@ def _compute(
         with _feature_stage(
             "shots_internal", telemetry, job, deadline, stage_budget
         ) as stage_check:
-            internal_shots = analyze_shots(path, media, cancel_check=stage_check)
+            internal_shots = analyze_shot_timeline(stage_check)
             stage_check()
+
+    feature_calls: list[tuple[str, Any]] = []
+    if "ocr" in requested_set:
+        feature_calls.append(
+            (
+                "ocr",
+                lambda: _run_ocr_feature(
+                    path=path,
+                    media=media,
+                    shots=internal_shots,
+                    runtime=runtime,
+                    settings=settings,
+                    job=job,
+                    deadline=deadline,
+                    telemetry=telemetry,
+                    frame_access=frame_access,
+                ),
+            )
+        )
+    if AUDIO_FEATURES & requested_set:
+        feature_calls.append(
+            (
+                "audio",
+                lambda: _run_audio_features(
+                    requested_set=requested_set,
+                    path=path,
+                    media=media,
+                    runtime=runtime,
+                    settings=settings,
+                    job=job,
+                    deadline=deadline,
+                    telemetry=telemetry,
+                ),
+            )
+        )
+    background_slots = max(0, settings.media_analysis_feature_workers - 1)
+    feature_pool = (
+        resources.enter_context(ThreadPoolExecutor(
+            max_workers=min(background_slots, len(feature_calls)),
+            thread_name_prefix="media-feature",
+        ))
+        if background_slots and feature_calls
+        else None
+    )
+    background_features: list[tuple[str, Future[FeatureOutcome]]] = []
+    if feature_pool is not None:
+        background_features = [
+            (name, feature_pool.submit(call)) for name, call in feature_calls
+        ]
 
     if "subjects" in requested_set:
         with _feature_stage("subjects", telemetry, job, deadline, stage_budget) as stage_check:
@@ -528,6 +921,7 @@ def _compute(
                         media,
                         shots=internal_shots,
                         detector=runtime.subject_detector,
+                        frame_provider=frame_access.read_bgr,
                         cancel_check=stage_check,
                     )
                 body["subjects"] = subjects
@@ -582,6 +976,18 @@ def _compute(
                             else None
                         ),
                         detector=runtime.face_detector,
+                        frame_reader=frame_access.resized_view(
+                            width=(
+                                request.analysisResolution.width
+                                if request.analysisResolution
+                                else media.width
+                            ),
+                            height=(
+                                request.analysisResolution.height
+                                if request.analysisResolution
+                                else media.height
+                            ),
+                        ),
                         cancel_check=stage_check,
                     )
                 body["faces"] = faces
@@ -597,53 +1003,6 @@ def _compute(
                     "version": YUNET_CAPABILITY_VERSION,
                 }
 
-    if "ocr" in requested_set:
-        with _feature_stage("ocr", telemetry, job, deadline, stage_budget) as stage_check:
-            entry = manifest.by_name("PP-OCRv5_mobile_det")
-            try:
-                if entry is None:
-                    raise RuntimeError("OCR model is absent")
-                if entry.stub:
-                    regions: list[dict[str, Any]] = []
-                    ocr_status = "completed"
-                else:
-                    if runtime.ocr_session is None:
-                        raise RuntimeError("OCR runtime is unavailable")
-                    result = analyze_ocr(
-                        path,
-                        media,
-                        shots=internal_shots,
-                        model_path=settings.media_analysis_model_dir / entry.file,
-                        session=runtime.ocr_session,
-                        cancel_check=stage_check,
-                    )
-                    regions = result.regions
-                    ocr_status = result.status
-                if ocr_status == "failed":
-                    capabilities["ocr"] = {
-                        "status": "failed",
-                        "version": OCR_DETECTOR_VERSION,
-                        "warningCodes": ["OCR_UNAVAILABLE"],
-                    }
-                    warnings.append("OCR_UNAVAILABLE")
-                else:
-                    body["reservedRegions"] = regions
-                    capabilities["ocr"] = {
-                        "status": "completed",
-                        "version": OCR_DETECTOR_VERSION,
-                    }
-                    if not regions:
-                        warnings.append("OCR_EMPTY")
-            except AnalyzeError:
-                raise
-            except Exception:
-                capabilities["ocr"] = {
-                    "status": "failed",
-                    "version": OCR_DETECTOR_VERSION,
-                    "warningCodes": ["OCR_UNAVAILABLE"],
-                }
-                warnings.append("OCR_UNAVAILABLE")
-
     subject_tracks = body.get("subjects")
     if subject_tracks is None and request.priorFacts and request.priorFacts.subjects:
         subject_tracks = [
@@ -654,8 +1013,15 @@ def _compute(
 
     visual_requested = VISUAL_SHARED & requested_set
     if visual_requested:
-        with BoundedFrameAccess(path, cancel_check=cancel_check) as frame_access:
+        with nullcontext(frame_access):
             read_frame = frame_access.read_bgr
+
+            def read_gray_frame(index: int):
+                return frame_access.read_gray(
+                    index,
+                    max_dimension=settings.media_analysis_motion_max_dimension,
+                )
+
             motion_result = None
             motion_estimator = None
 
@@ -668,6 +1034,7 @@ def _compute(
                             path,
                             media,
                             frame_provider=read_frame,
+                            gray_frame_provider=read_gray_frame,
                             subject_boxes_by_frame=subject_boxes,
                             cancel_check=stage_check,
                         )
@@ -692,7 +1059,7 @@ def _compute(
                         if motion_result is None and "motion" not in requested_set:
                             motion_estimator = make_internal_motion_estimator(
                                 media,
-                                read_frame,
+                                read_gray_frame,
                                 subject_boxes_by_frame=subject_boxes,
                                 cancel_check=stage_check,
                             )
@@ -730,7 +1097,10 @@ def _compute(
                             shots=internal_shots,
                             prior_facts=request.priorFacts,
                             fill_only=fill_only,
-                            frame_provider=read_frame,
+                            frame_provider=lambda index: frame_access.read_bgr_downscaled(
+                                index,
+                                max_pixels=65536,
+                            ),
                             cancel_check=stage_check,
                         )
                         body["exposure"] = {"perShot": exposure.per_shot}
@@ -752,19 +1122,26 @@ def _compute(
                 ) as stage_check:
                     try:
                         def upload_thumbnail(grant: ThumbnailGrant, payload: bytes) -> None:
-                            uploaded = upload_artifact(
-                                payload,
-                                grant.signed_put_url,
-                                settings=settings,
-                                expires_at=grant.expires_at,
-                                mime_type=THUMBNAIL_MIME_TYPE,
-                                timeout_sec=min(
-                                    settings.media_analysis_download_timeout_sec,
-                                    stage_check.remaining(),
-                                ),
-                                cancel_check=stage_check,
-                            )
-                            telemetry.bytes_uploaded += int(uploaded["byteCount"])
+                            with _feature_stage(
+                                "upload_thumbnail",
+                                telemetry,
+                                job,
+                                deadline,
+                                stage_budget,
+                            ) as upload_stage:
+                                uploaded = upload_artifact(
+                                    payload,
+                                    grant.signed_put_url,
+                                    settings=settings,
+                                    expires_at=grant.expires_at,
+                                    mime_type=THUMBNAIL_MIME_TYPE,
+                                    timeout_sec=min(
+                                        settings.media_analysis_download_timeout_sec,
+                                        upload_stage.remaining(),
+                                    ),
+                                    cancel_check=upload_stage,
+                                )
+                                telemetry.add_uploaded_bytes(int(uploaded["byteCount"]))
 
                         thumb = analyze_thumbnails(
                             path,
@@ -794,59 +1171,15 @@ def _compute(
                             "version": THUMBNAIL_ANALYZER_VERSION,
                         }
 
-    if AUDIO_FEATURES & requested_set:
-        with _feature_stage("pcm", telemetry, job, deadline, stage_budget) as stage_check:
-            shared_pcm = extract_analysis_pcm(
-                path,
-                has_audio=media.has_audio,
-                source_duration_sec=media.duration,
-                source_sample_rate=media.audio_sample_rate,
-                source_channel_count=media.audio_channel_count,
-                timeout_sec=stage_check.remaining(),
-                cancel_check=stage_check,
-            )
-        vad_session = _resolve_vad_session(runtime, manifest, settings)
-
-        if "audio" in requested_set:
-            with _feature_stage("audio", telemetry, job, deadline, stage_budget) as stage_check:
-                try:
-                    audio = analyze_audio(
-                        shared_pcm,
-                        source_path=path if media.has_audio else None,
-                        fps=fps,
-                        vad_session=vad_session,
-                        require_vad=True,
-                        timeout_sec=stage_check.remaining(),
-                        cancel_check=stage_check,
-                    )
-                    body["audio"] = audio.to_payload()
-                    audio_warnings = list(audio.warning_codes)
-                    if audio_warnings:
-                        warnings.extend(audio_warnings)
-                    capabilities["audio"] = audio_capability(
-                        status=audio.status,
-                        warning_codes=audio_warnings or None,
-                    )
-                except AnalyzeError:
-                    raise
-                except Exception:
-                    capabilities["audio"] = audio_capability(status="failed")
-
-        if "waveform" in requested_set:
-            with _feature_stage("waveform", telemetry, job, deadline, stage_budget):
-                try:
-                    waveform_payload, waveform_warnings = analyze_waveform(shared_pcm)
-                    body["waveform"] = waveform_payload
-                    if waveform_warnings:
-                        warnings.extend(waveform_warnings)
-                    capabilities["waveform"] = waveform_capability(
-                        status="completed",
-                        warning_codes=waveform_warnings or None,
-                    )
-                except AnalyzeError:
-                    raise
-                except Exception:
-                    capabilities["waveform"] = waveform_capability(status="failed")
+    outcomes: list[FeatureOutcome]
+    if feature_pool is None:
+        outcomes = [call() for _name, call in feature_calls]
+    else:
+        outcomes = [future.result() for _name, future in background_features]
+    for feature_body, feature_capabilities, feature_warnings in outcomes:
+        body.update(feature_body)
+        capabilities.update(feature_capabilities)
+        warnings.extend(feature_warnings)
 
     if request.analysisResolution:
         body["analysisTransform"] = analysis_transform(
@@ -925,6 +1258,9 @@ def _compute(
         provenance["shotClassifierVersion"] = SHOT_CLASSIFIER_VERSION
     if "motion" in requested_set:
         provenance["motionAnalyzerVersion"] = MOTION_ANALYZER_VERSION
+        provenance["motionWorkingMaxDimension"] = (
+            settings.media_analysis_motion_max_dimension
+        )
     if "quality" in requested_set:
         provenance["qualityPolicyVersion"] = QUALITY_POLICY_VERSION
     if AUDIO_FEATURES & requested_set:
@@ -1028,7 +1364,15 @@ def _compute_matte(
         with _feature_stage(
             "person_matte", telemetry, job, deadline, stage_budget
         ) as stage_check:
-            with BoundedFrameAccess(path, cancel_check=stage_check) as frame_access:
+            with BoundedFrameAccess(
+                path,
+                config=FrameAccessConfig(
+                    max_cached_frames=1,
+                    max_cached_bytes=settings.media_analysis_frame_cache_bytes,
+                    max_spill_bytes=0,  # Matte is a single sequential consumer.
+                ),
+                cancel_check=stage_check,
+            ) as frame_access:
 
                 def frame_stream():
                     for index in range(media.frame_count):
@@ -1036,14 +1380,21 @@ def _compute_matte(
                         yield index, frame_access.read_bgr(index)
 
                 def upload_timed(body_bytes: bytes, content_type: str, grant: Any) -> None:
-                    upload_matte(
-                        body_bytes,
-                        content_type,
-                        grant,
-                        timeout_sec=stage_check.remaining(),
-                        cancel=stage_check,
-                    )
-                    telemetry.bytes_uploaded += len(body_bytes)
+                    with _feature_stage(
+                        "upload_matte",
+                        telemetry,
+                        job,
+                        deadline,
+                        stage_budget,
+                    ) as upload_stage:
+                        upload_matte(
+                            body_bytes,
+                            content_type,
+                            grant,
+                            timeout_sec=upload_stage.remaining(),
+                            cancel=upload_stage,
+                        )
+                        telemetry.add_uploaded_bytes(len(body_bytes))
 
                 candidate = run_person_matte_stage1(
                     frames=frame_stream(),
@@ -1056,7 +1407,11 @@ def _compute_matte(
                     work_dir=work_dir,
                     cancel_check=stage_check,
                     deadline=min(deadline, stage_check.stage_deadline),
+                    keyframe_interval=settings.media_analysis_matte_keyframe_interval,
                 )
+                telemetry.unique_frames_decoded = frame_access.unique_decodes
+                telemetry.frame_cache_hits = frame_access.cache_hits
+                telemetry.record_stage("decode", frame_access.decode_duration_ms)
         body["personMatte"] = candidate.as_dict()
         capabilities["person_matte"] = {
             "status": "completed",
@@ -1096,6 +1451,11 @@ def _compute_matte(
         matte_provenance_block(
             modnet_entry=modnet_entry,
             lock=lock,
+            runtime=(
+                ",".join(runtime.execution_providers)
+                if runtime.execution_providers
+                else "onnxruntime"
+            ),
         )
     )
     if runtime.reference_mode:

@@ -156,6 +156,16 @@ It sets `MEDIA_ANALYSIS_MATTE_REFERENCE_MODE=1`, reports
 | `MEDIA_ANALYSIS_DOWNLOAD_TIMEOUT_SEC` | Per-download timeout; default `30` |
 | `MEDIA_ANALYSIS_JOB_TIMEOUT_SEC` | End-to-end job deadline; default `240` |
 | `MEDIA_ANALYSIS_STAGE_TIMEOUT_SEC` | Per-stage deadline; default `60` |
+| `MEDIA_ANALYSIS_FEATURE_WORKERS` | Bounded analyzers per job, including the main visual path; default `3` |
+| `MEDIA_ANALYSIS_FRAME_CACHE_BYTES` | Shared sampled-frame cache ceiling; default `256 MiB` |
+| `MEDIA_ANALYSIS_FRAME_SPILL_BYTES` | Temporary sampled-frame disk cache; default `2 GiB`, `0` disables |
+| `MEDIA_ANALYSIS_WORKER_ROLE` | `combined`, `general`, or `ocr`; matte is selected by its image profile |
+| `MEDIA_ANALYSIS_CACHE_DIR` | Content-addressed local media/result cache directory |
+| `MEDIA_ANALYSIS_CACHE_MAX_BYTES` | LRU cache ceiling; default `2 GiB` |
+| `MEDIA_ANALYSIS_CACHE_TTL_SEC` | Local cache TTL; default `86400` |
+| `MEDIA_ANALYSIS_MATTE_EXECUTION_PROVIDER` | `auto`, `tensorrt`, `cuda`, or `cpu` |
+| `MEDIA_ANALYSIS_MATTE_KEYFRAME_INTERVAL` | MODNet keyframe cadence; default every `3` frames |
+| `MEDIA_ANALYSIS_TENSORRT_CACHE_DIR` | Writable TensorRT engine-cache directory |
 
 Never accept a raw object key or an arbitrary caller URL on the public `/analyze` body. The trusted orchestrator minting the signed GET is the only supported client.
 Allowlist entries are exact hosts unless written as `*.storage.example`; the wildcard matches subdomains only.

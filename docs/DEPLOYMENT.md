@@ -78,6 +78,18 @@ does not flip the owned PP-OCR parity gate.
 docker build --platform linux/amd64 -f docker/analysis-cpu.Dockerfile -t media-analysis:analysis-cpu .
 ```
 
+Run this image as separate pools. The image defaults to the general role; the
+OCR pool overrides the role while using the same immutable image:
+
+```bash
+docker run -e MEDIA_ANALYSIS_WORKER_ROLE=general media-analysis:analysis-cpu
+docker run -e MEDIA_ANALYSIS_WORKER_ROLE=ocr media-analysis:analysis-cpu
+```
+
+The general process does not verify or load the OCR session, and the OCR process
+does not load subject, face, or VAD sessions. Route mixed requests at the
+orchestrator; use `combined` only when one-process compatibility is required.
+
 Production image properties:
 
 - Non-editable `pip install .` (not editable)
@@ -85,6 +97,7 @@ Production image properties:
 - Writable temp: `/var/tmp/media-analysis` via `TMPDIR` / `MEDIA_ANALYSIS_TMPDIR`
 - Models at `/models` (read-only to runtime user, world-readable)
 - One uvicorn worker
+- Role-scoped startup model loading (`general` or `ocr`)
 - `/ready` distinguishes mechanical serving readiness from production parity
 
 The checked-in `matte-cpu.Dockerfile` is explicitly a Stage 1 reference image. It enables
@@ -92,6 +105,13 @@ The checked-in `matte-cpu.Dockerfile` is explicitly a Stage 1 reference image. I
 `productionInferenceReady: false`. Do not deploy it as a production matte worker. A
 production profile requires an owned immutable MODNet export plus benchmark and decoded-luma
 cross-consumer parity gates.
+
+`docker/matte-gpu.Dockerfile` is the fail-fast production runtime target. It
+pins the compatible TensorRT 10.9/ONNX Runtime GPU 1.22 stack, selects
+`TensorrtExecutionProvider`, enables FP16 engine caching, and does not enable
+reference mode. With the current stub/closed model lock it intentionally cannot
+become ready; build/deploy it only after replacing the matte profile with the
+approved owned export and opening the existing gates.
 
 ## OpenCV / PySceneDetect
 

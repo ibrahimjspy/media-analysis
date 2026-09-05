@@ -183,6 +183,26 @@ def test_pipeline_rejects_out_of_order_frames(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.ffmpeg
+def test_pipeline_infers_keyframes_and_propagates_between_them(tmp_path: Path) -> None:
+    session = SequenceModnetSession([0.5, 0.5])
+
+    run_person_matte_stage1(
+        frames=_frames(6, 32, 32, 128),
+        canonical=_canonical(frame_count=6, width=32, height=32),
+        matte_target={"mode": "all_people"},
+        output_grants=_grants(),
+        prior_facts=_shots(6),
+        session=session,
+        upload=lambda _body, _content_type, _grant: None,
+        work_dir=tmp_path,
+        keyframe_interval=3,
+    )
+
+    assert session._index == 2
+
+
+@pytest.mark.unit
 def test_stub_model_not_production_ready() -> None:
     entry = ModelEntry(
         name="modnet",

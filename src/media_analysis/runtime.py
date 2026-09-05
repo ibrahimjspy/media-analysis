@@ -23,7 +23,11 @@ from media_analysis.models_manifest import (
     ManifestState,
     verify_models,
 )
-from media_analysis.person_matte.modnet import ReferenceModnetSession, load_modnet_session
+from media_analysis.person_matte.modnet import (
+    ReferenceModnetSession,
+    infer_modnet_alpha,
+    load_modnet_session,
+)
 from media_analysis.person_matte.readiness import matte_worker_ready_for_serving
 from media_analysis.tools.model_lock import ProfileGates, load_lock
 
@@ -43,6 +47,7 @@ class RuntimeState:
     reference_mode: bool = False
     production_inference_ready: bool = False
     production_blockers: tuple[str, ...] = ()
+    execution_providers: tuple[str, ...] = ()
 
 
 def _model_path(settings: Settings, manifest: ManifestState, name: str) -> Path:
@@ -68,11 +73,14 @@ def _profile_gates(settings: Settings) -> ProfileGates | None:
     return None
 
 
-def _required_stub_entries(manifest: ManifestState) -> tuple[Any, ...]:
+def _required_stub_entries(
+    manifest: ManifestState,
+    required_models: set[str],
+) -> tuple[Any, ...]:
     return tuple(
         entry
         for entry in manifest.entries
-        if entry.name in REQUIRED_CPU_MODELS or entry.name == "modnet"
+        if entry.name in required_models or entry.name == "modnet"
     )
 
 
@@ -91,9 +99,17 @@ def _silero_production_ready(
 
 def load_runtime(settings: Settings) -> RuntimeState:
     """Verify artifacts, construct sessions, and run deterministic warmups."""
+    required_for_role: tuple[str, ...] | None = None
+    if settings.worker_role == "general":
+        required_for_role = tuple(
+            name for name in REQUIRED_CPU_MODELS if name != "PP-OCRv5_mobile_det"
+        )
+    elif settings.worker_role == "ocr":
+        required_for_role = ("PP-OCRv5_mobile_det",)
     manifest = verify_models(
         settings.media_analysis_model_dir,
         image=settings.media_analysis_image,
+        required_models=required_for_role,
     )
     gates = _profile_gates(settings)
     if not manifest.ready:
@@ -128,7 +144,13 @@ def load_runtime(settings: Settings) -> RuntimeState:
         else:
             try:
                 modnet_session = load_modnet_session(
-                    _model_path(settings, manifest, "modnet")
+                    _model_path(settings, manifest, "modnet"),
+                    execution_provider=settings.media_analysis_matte_execution_provider,
+                    engine_cache_dir=settings.media_analysis_tensorrt_cache_dir,
+                )
+                infer_modnet_alpha(
+                    modnet_session,
+                    np.zeros((256, 256, 3), dtype=np.uint8),
                 )
                 loaded.append("modnet")
             except Exception as exc:
@@ -138,6 +160,21 @@ def load_runtime(settings: Settings) -> RuntimeState:
             gates=gates,
             reference_mode=False,
         )
+        execution_providers = (
+            tuple(modnet_session.get_providers())
+            if modnet_session is not None and hasattr(modnet_session, "get_providers")
+            else (("ReferenceExecutionProvider",) if modnet_session is not None else ())
+        )
+        gpu_ready = any(
+            provider in {"TensorrtExecutionProvider", "CUDAExecutionProvider"}
+            for provider in execution_providers
+        )
+        if production_ready and not gpu_ready:
+            errors.append("production matte inference requires TensorRT or CUDA")
+            production_errors = (
+                *production_errors,
+                "production matte inference requires TensorRT or CUDA",
+            )
         ready = not errors and bool(loaded)
         return RuntimeState(
             manifest=manifest,
@@ -147,11 +184,18 @@ def load_runtime(settings: Settings) -> RuntimeState:
             modnet_session=modnet_session,
             errors=tuple(errors),
             reference_mode=not production_ready,
-            production_inference_ready=production_ready and ready,
+            production_inference_ready=production_ready and gpu_ready and ready,
             production_blockers=production_errors,
+            execution_providers=execution_providers,
         )
 
-    required_stub = _required_stub_entries(manifest)
+    required_models = set(REQUIRED_CPU_MODELS)
+    if settings.worker_role == "general":
+        required_models.discard("PP-OCRv5_mobile_det")
+    elif settings.worker_role == "ocr":
+        required_models = {"PP-OCRv5_mobile_det"}
+
+    required_stub = _required_stub_entries(manifest, required_models)
     if any(entry.stub for entry in required_stub) and not settings.media_analysis_allow_stub_models:
         return RuntimeState(
             manifest=manifest,
@@ -162,7 +206,7 @@ def load_runtime(settings: Settings) -> RuntimeState:
         )
 
     if any(entry.stub for entry in required_stub) and settings.media_analysis_allow_stub_models:
-        loaded_stub = list(manifest.loaded)
+        loaded_stub = [name for name in manifest.loaded if name in required_models]
         return RuntimeState(
             manifest=manifest,
             ready=True,
@@ -170,6 +214,34 @@ def load_runtime(settings: Settings) -> RuntimeState:
             warmup_complete=True,
             reference_mode=True,
             production_blockers=("stub model artifacts are not production-ready",),
+        )
+
+    if settings.worker_role == "ocr":
+        entry = manifest.by_name("PP-OCRv5_mobile_det")
+        errors: list[str] = []
+        session = None
+        try:
+            if entry is None:
+                raise RuntimeError("OCR model is absent")
+            session = create_det_session(_model_path(settings, manifest, entry.name))
+            run_det_inference(session, np.zeros((320, 320, 3), dtype=np.uint8))
+        except Exception as exc:
+            errors.append(
+                "PP-OCRv5_mobile_det load/warmup failed: "
+                f"{type(exc).__name__} ({preprocessing_version()})"
+            )
+        owned_ocr_ready = gates is not None and gates.owned_ppocr_export_recorded
+        blockers = () if owned_ocr_ready else ("owned PP-OCR export parity gate is closed",)
+        ready = not errors and session is not None
+        return RuntimeState(
+            manifest=manifest,
+            ready=ready,
+            loaded_models=("PP-OCRv5_mobile_det",) if ready else (),
+            warmup_complete=ready,
+            ocr_session=session,
+            errors=tuple(errors),
+            production_inference_ready=ready and owned_ocr_ready,
+            production_blockers=blockers,
         )
 
     loaded = []
@@ -195,20 +267,21 @@ def load_runtime(settings: Settings) -> RuntimeState:
     except Exception as exc:
         errors.append(f"yunet load/warmup failed: {type(exc).__name__}")
 
-    try:
-        ocr_session = create_det_session(
-            _model_path(settings, manifest, "PP-OCRv5_mobile_det")
-        )
-        run_det_inference(
-            ocr_session,
-            np.zeros((320, 320, 3), dtype=np.uint8),
-        )
-        loaded.append("PP-OCRv5_mobile_det")
-    except Exception as exc:
-        errors.append(
-            "PP-OCRv5_mobile_det load/warmup failed: "
-            f"{type(exc).__name__} ({preprocessing_version()})"
-        )
+    if settings.worker_role != "general":
+        try:
+            ocr_session = create_det_session(
+                _model_path(settings, manifest, "PP-OCRv5_mobile_det")
+            )
+            run_det_inference(
+                ocr_session,
+                np.zeros((320, 320, 3), dtype=np.uint8),
+            )
+            loaded.append("PP-OCRv5_mobile_det")
+        except Exception as exc:
+            errors.append(
+                "PP-OCRv5_mobile_det load/warmup failed: "
+                f"{type(exc).__name__} ({preprocessing_version()})"
+            )
 
     vad_entry = manifest.by_name(SILERO_VAD_MODEL_NAME)
     if vad_entry is not None and not vad_entry.stub:
@@ -226,8 +299,11 @@ def load_runtime(settings: Settings) -> RuntimeState:
         errors.append(
             "silero-vad production gate is closed or its artifact is not production-ready"
         )
-    ready = not errors and set(REQUIRED_CPU_MODELS).issubset(set(loaded))
-    owned_ocr_ready = gates is not None and gates.owned_ppocr_export_recorded
+    ready = not errors and required_models.issubset(set(loaded))
+    owned_ocr_ready = (
+        settings.worker_role == "general"
+        or (gates is not None and gates.owned_ppocr_export_recorded)
+    )
     production_blockers: list[str] = []
     if not silero_ready:
         production_blockers.append(

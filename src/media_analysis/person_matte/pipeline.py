@@ -53,6 +53,40 @@ def _resize_bgr(frame_bgr: np.ndarray, width: int, height: int) -> np.ndarray:
     return cv2.resize(frame_bgr, (width, height), interpolation=cv2.INTER_AREA)
 
 
+def propagate_alpha_with_flow(
+    previous_bgr: np.ndarray,
+    current_bgr: np.ndarray,
+    previous_alpha: np.ndarray,
+) -> np.ndarray:
+    """Map current pixels back to the previous alpha using backward optical flow."""
+    previous_gray = cv2.cvtColor(previous_bgr, cv2.COLOR_BGR2GRAY)
+    current_gray = cv2.cvtColor(current_bgr, cv2.COLOR_BGR2GRAY)
+    flow = cv2.calcOpticalFlowFarneback(
+        current_gray,
+        previous_gray,
+        None,
+        0.5,
+        3,
+        15,
+        3,
+        5,
+        1.2,
+        0,
+    )
+    height, width = previous_gray.shape
+    grid_x, grid_y = np.meshgrid(
+        np.arange(width, dtype=np.float32),
+        np.arange(height, dtype=np.float32),
+    )
+    return cv2.remap(
+        previous_alpha,
+        grid_x + flow[:, :, 0],
+        grid_y + flow[:, :, 1],
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+
+
 UploadCallback = Callable[[bytes, str, MatteOutputGrant], None]
 """(body, content_type, grant) → None; invoked exactly once for Stage 1."""
 
@@ -65,10 +99,15 @@ def _iter_refined_gray_frames(
     matte_h: int,
     session: OnnxInferenceSession,
     temporal: TemporalMatteState,
+    keyframe_interval: int,
     cancel_check: Callable[[], None] | None,
     deadline: float | None,
 ) -> Iterator[bytes]:
+    if keyframe_interval < 1:
+        raise ValueError("keyframe_interval must be positive")
     expected = 0
+    previous_frame: np.ndarray | None = None
+    previous_alpha: np.ndarray | None = None
     for source_frame, frame_bgr in frames:
         if source_frame != expected:
             raise AnalyzeError(
@@ -79,9 +118,29 @@ def _iter_refined_gray_frames(
         _check_cancel(cancel_check)
         _check_deadline(deadline)
         resized = _resize_bgr(frame_bgr, matte_w, matte_h)
-        raw_alpha = infer_modnet_alpha(session, resized)
-        stabilized = temporal.apply(raw_alpha, source_frame=source_frame)
+        is_keyframe = (
+            source_frame == 0
+            or source_frame % keyframe_interval == 0
+            or temporal.should_reset(source_frame)
+            or previous_frame is None
+            or previous_alpha is None
+        )
+        aligned_previous = None
+        if previous_frame is not None and previous_alpha is not None and not (
+            temporal.should_reset(source_frame)
+        ):
+            aligned_previous = propagate_alpha_with_flow(previous_frame, resized, previous_alpha)
+        if is_keyframe:
+            raw_alpha = infer_modnet_alpha(session, resized)
+        else:
+            assert aligned_previous is not None
+            raw_alpha = aligned_previous
+        stabilized = temporal.apply(
+            raw_alpha, source_frame=source_frame, aligned_previous=aligned_previous,
+        )
         refined = refine_alpha_rgb_guided(stabilized, resized)
+        previous_frame = resized
+        previous_alpha = refined
         yield refined.tobytes()
     if expected != canonical.frame_count:
         raise AnalyzeError(
@@ -102,8 +161,9 @@ def run_person_matte_stage1(
     work_dir: Path,
     cancel_check: Callable[[], None] | None = None,
     deadline: float | None = None,
+    keyframe_interval: int = 3,
 ) -> PersonMatteCandidate:
-    """Sequential full-frame Stage 1 matte: all_people + full_duration + one PUT grant."""
+    """Keyframe MODNet inference with temporal propagation and one final PUT."""
     facts = coerce_mapping(prior_facts, field_name="priorFacts")
     target, grant, shots = validate_matte_stage1_request(
         matte_target=matte_target,
@@ -125,6 +185,7 @@ def run_person_matte_stage1(
             matte_h=matte_h,
             session=session,
             temporal=temporal,
+            keyframe_interval=keyframe_interval,
             cancel_check=cancel_check,
             deadline=deadline,
         ),

@@ -27,6 +27,7 @@ def test_prod_dockerfile_installs_ffmpeg_and_vendors_at_build() -> None:
     assert "vendor_models" in text
     assert "MEDIA_ANALYSIS_MODEL_DIR=/models" in text
     assert "MEDIA_ANALYSIS_IMAGE=analysis-cpu" in text
+    assert "MEDIA_ANALYSIS_WORKER_ROLE=general" in text
     assert "vendor_models" not in ENTRYPOINT.read_text(encoding="utf-8")
 
 

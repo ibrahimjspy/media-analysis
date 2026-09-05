@@ -25,6 +25,7 @@ from media_analysis.models_manifest import ManifestState
 from media_analysis.request_hash import request_hash
 from media_analysis.runtime import RuntimeState, load_runtime
 from media_analysis.schemas import AnalyzeRequest
+from media_analysis.telemetry import stage_latency_metrics
 
 _manifest: ManifestState | None = None
 _runtime: RuntimeState | None = None
@@ -89,7 +90,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "version": __version__,
             "loadedModels": list(state.loaded_models),
             "warmupComplete": state.warmup_complete,
+            "workerRole": cfg.worker_role,
+            "executionProviders": list(state.execution_providers),
         }
+
+    @app.get("/metrics")
+    def metrics() -> dict[str, Any]:
+        """Rolling per-stage p50/p95 latency signals for worker autoscaling."""
+        return {"stageLatencyPercentiles": stage_latency_metrics.snapshot()}
 
     def _require_key(x_media_analysis_key: str | None) -> None:
         if (

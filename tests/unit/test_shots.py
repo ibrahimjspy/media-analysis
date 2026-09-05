@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
+from scenedetect import open_video
+from tests.unit.test_frame_access import make_probe_mp4
 
 import media_analysis.features.shots as shots_module
 from media_analysis.decode import ProbedMedia
@@ -71,3 +75,25 @@ def test_shot_analysis_checks_cancellation_during_detection(
     monkeypatch.setattr(shots_module, "_detect_boundaries", detect)
     analyze_shots(Path("clip.mp4"), media, cancel_check=check)
     assert checks >= 4
+
+
+@pytest.mark.unit
+@pytest.mark.ffmpeg
+def test_scene_tap_indices_match_actual_decoded_frames(tmp_path: Path) -> None:
+    path = make_probe_mp4(tmp_path / "tap.mp4", frames=12)
+    tapped = []
+    video = open_video(str(path))
+    stream = shots_module._TappingVideoStream(
+        video, lambda index, frame: tapped.append((index, frame.copy())),
+    )
+    while stream.read() is not False:
+        pass
+    assert [index for index, frame in tapped] == list(range(12))
+    capture = cv2.VideoCapture(str(path))
+    try:
+        for index, frame in tapped:
+            ok, expected = capture.read()
+            assert ok
+            np.testing.assert_array_equal(frame, expected)
+    finally:
+        capture.release()

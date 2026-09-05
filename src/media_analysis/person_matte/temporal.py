@@ -16,20 +16,28 @@ class TemporalMatteState:
     def __init__(self, shots: tuple[ShotBoundary, ...]) -> None:
         self._prev: np.ndarray | None = None
         self._shot_starts = frozenset(
-            shot.start_frame for shot in shots[1:]  # first shot start does not reset cold state
+            shot.start_frame
+            for shot in shots[1:]  # first shot start does not reset cold state
         )
 
     def should_reset(self, source_frame: int) -> bool:
         return source_frame in self._shot_starts
 
-    def apply(self, alpha: np.ndarray, *, source_frame: int) -> np.ndarray:
+    def apply(
+        self,
+        alpha: np.ndarray,
+        *,
+        source_frame: int,
+        aligned_previous: np.ndarray | None = None,
+    ) -> np.ndarray:
         if self.should_reset(source_frame):
             self._prev = None
         current = alpha.astype(np.float32)
         if self._prev is None or self._prev.shape != current.shape:
             stabilized = current
         else:
-            stabilized = TEMPORAL_EMA_ALPHA * self._prev + (1.0 - TEMPORAL_EMA_ALPHA) * current
+            previous = self._prev if aligned_previous is None else aligned_previous
+            stabilized = TEMPORAL_EMA_ALPHA * previous + (1.0 - TEMPORAL_EMA_ALPHA) * current
         self._prev = stabilized.copy()
         return np.clip(stabilized, 0.0, 255.0).astype(np.uint8)
 

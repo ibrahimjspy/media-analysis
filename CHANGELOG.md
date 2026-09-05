@@ -12,6 +12,12 @@ All notable changes are documented here. This project follows
   response `sha256` and `byteCount` for orchestrator verification.
 - Per-stage timings, download/upload byte counts, decoded-pixel limits, and
   per-stage timeouts on `/analyze`.
+- Shared sampled-frame decoding, bounded concurrent OCR/audio analysis,
+  feature-specific grayscale/keyframe sampling, and rolling p50/p95 metrics.
+- Content-addressed local source, canonical-media, and JSON analysis caches
+  keyed by caller-verified media fingerprints.
+- General/OCR worker roles plus TensorRT/CUDA MODNet provider selection with
+  TensorRT FP16 engines and keyframe matte propagation.
 - FFmpeg configure/version and runtime library provenance on every result.
 - Generated people, face, OCR, speech, VFR, and rotation golden fixtures, plus
   a Linux CI job that runs real-model tests.
@@ -20,6 +26,15 @@ All notable changes are documented here. This project follows
   an owned artifact is hosted and the reference tensor is committed.
 
 ### Fixed
+
+- Preserve real subject inference with the shared frame provider, correct scene
+  tap indices, and cancel/join background features before request cleanup.
+- Make disabled/oversized caches bypass storage, retry failed feature results,
+  and keep active media safe from cross-process cache eviction.
+- Use backward flow and motion-aligned temporal blending for matte propagation;
+  require explicit GPU providers to initialize without silent fallback.
+- Reuse evicted sampled frames through bounded temporary disk spill, with a
+  reproducible decoder/cache benchmark and regression coverage.
 
 - Filter weak YuNet false positives against requested subject evidence and
   consolidate face fragments associated with the same subject track.

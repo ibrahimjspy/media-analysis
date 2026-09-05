@@ -50,7 +50,12 @@ def load_manifest(model_dir: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def verify_models(model_dir: Path, *, image: str) -> ManifestState:
+def verify_models(
+    model_dir: Path,
+    *,
+    image: str,
+    required_models: tuple[str, ...] | None = None,
+) -> ManifestState:
     raw = load_manifest(model_dir)
     entries = tuple(
         ModelEntry(
@@ -63,7 +68,9 @@ def verify_models(model_dir: Path, *, image: str) -> ManifestState:
         )
         for item in raw.get("models", [])
     )
-    required = REQUIRED_MATTE_MODELS if image.startswith("matte") else REQUIRED_CPU_MODELS
+    required = required_models
+    if required is None:
+        required = REQUIRED_MATTE_MODELS if image.startswith("matte") else REQUIRED_CPU_MODELS
     optional = () if image.startswith("matte") else OPTIONAL_CPU_MODELS
     errors: list[str] = []
     loaded: list[str] = []

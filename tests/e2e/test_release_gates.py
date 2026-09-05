@@ -6,6 +6,7 @@ from tests.fixtures.generate import write_rotated_mp4, write_speech_tone_mp4, wr
 
 import media_analysis.analyze as analyze_module
 from media_analysis.app import create_app, reset_manifest
+from media_analysis.jobs import registry
 
 
 def _body(url: str, features: list[str], key: str, expiry: str) -> dict:
@@ -41,6 +42,8 @@ def test_analyze_reports_telemetry_and_build_provenance(
     assert telemetry["stageTimingsMs"]["probe"] >= 0
     assert telemetry["stageTimingsMs"]["shots"] >= 0
     assert telemetry["stageTimingsMs"]["motion"] >= 0
+    assert telemetry["stageTimingsMs"]["decode"] >= 0
+    assert telemetry["frameCacheHits"] > 0
     assert body["provenance"]["ffmpegBuild"]["ffmpegVersion"] != "unavailable"
     assert body["provenance"]["ffmpegBuild"]["ffprobeVersion"] != "unavailable"
     assert body["provenance"]["runtimeBuild"]["onnxruntimeVersion"]
@@ -192,3 +195,40 @@ def test_people_and_ocr_goldens_complete_on_stub_models(
     assert ocr.status_code == 200, ocr.text
     assert ocr.json()["reservedRegions"] == []
     assert "OCR_EMPTY" in ocr.json()["warningCodes"]
+
+
+@pytest.mark.e2e
+@pytest.mark.ffmpeg
+def test_media_fingerprint_reuses_source_canonical_and_analysis(
+    settings,
+    auth_headers: dict[str, str],
+    source_server: dict,
+    future_expiry: str,
+    tmp_path: Path,
+) -> None:
+    cached_settings = settings.model_copy(
+        update={"media_analysis_cache_dir": tmp_path / "media-cache"}
+    )
+    payload = _body(source_server["url"], ["shots"], "cache-1", future_expiry)
+    payload["canonicalize"] = True
+    payload["source"]["sha256"] = source_server["sha256"]
+    reset_manifest()
+    registry.clear()
+    try:
+        with TestClient(create_app(cached_settings)) as cached_client:
+            first = cached_client.post("/analyze", headers=auth_headers, json=payload)
+            assert first.status_code == 200, first.text
+            source_server["handler"].last_path = "not-requested"
+            payload["idempotencyKey"] = "cache-2"
+            payload["source"]["signedGetUrl"] += "&retry=1"
+            second = cached_client.post("/analyze", headers=auth_headers, json=payload)
+        assert second.status_code == 200, second.text
+        telemetry = second.json()["telemetry"]
+        assert telemetry["sourceCacheHit"] is True
+        assert telemetry["canonicalCacheHit"] is True
+        assert telemetry["resultCacheHit"] is True
+        assert telemetry["bytesDownloaded"] == 0
+        assert source_server["handler"].last_path == "not-requested"
+    finally:
+        reset_manifest()
+        registry.clear()

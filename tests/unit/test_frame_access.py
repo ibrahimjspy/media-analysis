@@ -1,4 +1,5 @@
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -103,3 +104,69 @@ def test_bounded_frame_access_honors_cancellation(tmp_path: Path) -> None:
         with pytest.raises(AnalyzeError) as exc:
             access.read_bgr(1)
         assert exc.value.code == CANCELLED
+
+
+@pytest.mark.unit
+@pytest.mark.ffmpeg
+def test_frame_access_coalesces_concurrent_reads_and_builds_gray_view(tmp_path: Path) -> None:
+    video = make_probe_mp4(tmp_path / "clip.mp4", frames=6)
+    with BoundedFrameAccess(video) as access:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            frames = list(pool.map(access.read_bgr, [2, 2, 2, 2]))
+        gray = access.read_gray(2, max_dimension=80)
+        assert all(frame.shape == frames[0].shape for frame in frames)
+        assert gray.ndim == 2
+        assert max(gray.shape) <= 80
+        assert access.unique_decodes == 1
+        assert access.cache_hits == 4
+
+
+@pytest.mark.unit
+@pytest.mark.ffmpeg
+def test_repeated_pass_reuses_samples_after_memory_eviction(tmp_path: Path) -> None:
+    video = make_probe_mp4(tmp_path / "clip.mp4", frames=60)
+    config = FrameAccessConfig(max_cached_frames=2, max_cached_bytes=120000)
+    access = BoundedFrameAccess(video, config=config)
+    with access:
+        indices = list(range(0, 60, 6)) + [59]
+        first = [access.read_bgr(index) for index in indices]
+        assert access.unique_decodes == len(indices)
+        spill_bytes_before_replay = access.spill_bytes
+        for index, expected in zip(indices, first, strict=True):
+            actual = access.read_bgr(index)
+            np.testing.assert_array_equal(actual, expected)
+        assert access.unique_decodes == len(indices)
+        assert access.disk_hits > 0
+        assert access.spill_bytes == spill_bytes_before_replay
+        assert access._cache_bytes + access._gray_cache_bytes <= config.max_cached_bytes
+        assert 0 < access.spill_bytes <= config.max_spill_bytes
+        spill_root = Path(access._spill_dir.name)
+    assert not spill_root.exists()
+
+
+@pytest.mark.unit
+@pytest.mark.ffmpeg
+def test_gray_eviction_reuses_tapped_samples_without_redecode(tmp_path: Path) -> None:
+    video = make_probe_mp4(tmp_path / "clip.mp4", frames=6)
+    config = FrameAccessConfig(max_cached_bytes=4000)
+    with BoundedFrameAccess(video, config=config) as access:
+        for index in range(6):
+            access.prime_gray(index, np.full((60, 80, 3), index, np.uint8), max_dimension=80)
+        for index in range(6):
+            gray = access.read_gray(index, max_dimension=80)
+            assert np.all(gray == index)
+        assert access.unique_decodes == 0
+        assert access._cache_bytes + access._gray_cache_bytes <= config.max_cached_bytes
+
+
+@pytest.mark.unit
+@pytest.mark.ffmpeg
+def test_disk_budget_exhaustion_keeps_decode_available(tmp_path: Path) -> None:
+    video = make_probe_mp4(tmp_path / "clip.mp4", frames=3)
+    config = FrameAccessConfig(max_cached_frames=1, max_spill_bytes=10)
+    with BoundedFrameAccess(video, config=config) as access:
+        expected = access.read_bgr(0)
+        access.read_bgr(1)
+        np.testing.assert_array_equal(access.read_bgr(0), expected)
+        assert access.spill_bytes <= 10
+        assert access.spill_limited

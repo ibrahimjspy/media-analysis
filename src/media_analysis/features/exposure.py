@@ -21,8 +21,8 @@ from media_analysis.features.measure_common import (
 )
 
 # Provisional until benchmark; suffix marks benchmark-gated policy.
-EXPOSURE_ANALYZER_VERSION = "bt709-linear-xyz-mccamy-provisional-1.0.0"
-EXPOSURE_SAMPLING_POLICY_VERSION = "representative-5-per-shot-65536px-provisional-1.0.0"
+EXPOSURE_ANALYZER_VERSION = "bt709-linear-xyz-mccamy-provisional-1.1.0"
+EXPOSURE_SAMPLING_POLICY_VERSION = "representative-5-per-shot-65536px-provisional-1.1.0"
 SATURATION_COLOR_SPACE = "opencv_bgr_to_hsv_s_mean"
 LUMA_COLOR_SPACE = "bt709_linear_rgb_after_srgb_eotf"
 DOMINANT_COLOR_METHOD = "rgb_5bit_quantize_merge-provisional-1.0.0"

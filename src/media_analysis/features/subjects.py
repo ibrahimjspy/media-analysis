@@ -12,6 +12,7 @@ import numpy as np
 
 from media_analysis.decode import ProbedMedia
 from media_analysis.features.bytetrack import ByteTracker, STrack, TrackSampleRecord
+from media_analysis.features.measure_common import FrameProvider, ReadableFrameProvider
 from media_analysis.features.visual import model_provenance
 from media_analysis.features.yolox import (
     YOLOX_PREPROCESSING,
@@ -54,6 +55,7 @@ def analyze_subjects(
     detector: YoloxDetector | None = None,
     model_path: Path | None = None,
     config: SubjectAnalysisConfig | None = None,
+    frame_provider: FrameProvider | ReadableFrameProvider | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Run person detection + tracking; returns TRD `SubjectTrack` dicts."""
@@ -69,10 +71,27 @@ def analyze_subjects(
     decode_attempts = 0
     decode_successes = 0
 
-    capture = cv2.VideoCapture(str(path))
-    if not capture.isOpened():
-        capture.release()
-        raise RuntimeError("Could not open video for subject analysis")
+    capture: cv2.VideoCapture | None = None
+    if frame_provider is None:
+        capture = cv2.VideoCapture(str(path))
+        if not capture.isOpened():
+            capture.release()
+            raise RuntimeError("Could not open video for subject analysis")
+
+        def read_frame(frame_index: int) -> np.ndarray | None:
+            assert capture is not None
+            capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            ok, frame = capture.read()
+            return frame if ok else None
+
+    elif hasattr(frame_provider, "read"):
+        reader = frame_provider
+
+        def read_frame(frame_index: int) -> np.ndarray | None:
+            return reader.read(frame_index)  # type: ignore[union-attr]
+
+    else:
+        read_frame = frame_provider
 
     try:
         for shot_index, (start_frame, end_frame) in enumerate(shot_ranges):
@@ -91,9 +110,8 @@ def analyze_subjects(
                 if cancel_check:
                     cancel_check()
                 decode_attempts += 1
-                capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-                ok, frame_bgr = capture.read()
-                if not ok or frame_bgr is None:
+                frame_bgr = read_frame(frame_index)
+                if frame_bgr is None:
                     continue
                 decode_successes += 1
                 detections, meta = detector.detect(frame_bgr)
@@ -127,7 +145,8 @@ def analyze_subjects(
                     )
                 )
     finally:
-        capture.release()
+        if capture is not None:
+            capture.release()
 
     if decode_attempts and decode_successes == 0:
         raise RuntimeError("Could not decode sampled subject frames")

@@ -53,7 +53,7 @@ SUBJECT_BOX_PAD_FRAC = 1 / 40
 
 def build_motion_analyzer_version() -> str:
     return (
-        "opencv-lk-ransac-aff-provisional-v1.1.0"
+        "opencv-lk-ransac-aff-provisional-v1.2.0"
         f"-w{WINDOW_FRAMES}-s{SAMPLE_STRIDE}-fb{FB_CONSISTENCY_PX}-ir{MIN_INLIER_RATIO}"
         f"-sm{STATIC_MAG}-pt{PAN_TILT_MAG}-hm{HANDHELD_MAG}-wm{WHIP_MAG}"
         f"-sp{SCALE_PUSH}-sl{SCALE_PULL}-cd{COHERENCE_DIRECTION}-cm{COHERENCE_MOTION}"
@@ -116,6 +116,7 @@ def analyze_motion(
     *,
     config: MotionAnalysisConfig | None = None,
     frame_provider: FrameProvider | ReadableFrameProvider | None = None,
+    gray_frame_provider: FrameProvider | ReadableFrameProvider | None = None,
     subject_boxes_by_frame: SubjectBoxesByFrame | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> MotionAnalyzeResult:
@@ -124,7 +125,8 @@ def analyze_motion(
     if media.frame_count <= 0:
         return _empty_result(cfg)
 
-    read_frame, cleanup = _open_frame_reader(path, frame_provider)
+    selected_provider = gray_frame_provider or frame_provider
+    read_frame, cleanup = _open_frame_reader(path, selected_provider)
     try:
         return estimate_motion(
             media,
@@ -278,8 +280,17 @@ def _motion_between_frames(
     frame_index: int,
     subject_boxes_by_frame: SubjectBoxesByFrame | None,
 ) -> dict[str, float | None] | None:
-    prev_gray = cv2.cvtColor(prev_bgr, cv2.COLOR_BGR2GRAY)
-    next_gray = cv2.cvtColor(next_bgr, cv2.COLOR_BGR2GRAY)
+    prev_gray = (
+        prev_bgr
+        if prev_bgr.ndim == 2
+        else cv2.cvtColor(prev_bgr, cv2.COLOR_BGR2GRAY)
+    )
+    next_gray = (
+        next_bgr
+        if next_bgr.ndim == 2
+        else cv2.cvtColor(next_bgr, cv2.COLOR_BGR2GRAY)
+    )
+    height, width = prev_gray.shape[:2]
     mask = _feature_mask(width, height, frame_index, subject_boxes_by_frame)
     corners = cv2.goodFeaturesToTrack(
         prev_gray,

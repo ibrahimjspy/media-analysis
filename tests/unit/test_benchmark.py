@@ -2,8 +2,9 @@ import json
 from pathlib import Path
 
 import pytest
+from tests.unit.test_frame_access import make_probe_mp4
 
-from media_analysis.tools.benchmark import _percentile, main
+from media_analysis.tools.benchmark import _percentile, benchmark_sample_cache, main
 
 
 @pytest.mark.unit
@@ -27,3 +28,17 @@ def test_benchmark_harness_writes_machine_and_build(tmp_path, monkeypatch) -> No
     assert payload["build"]["runtimeBuild"]["onnxruntimeVersion"]
     assert payload["timerMs"]["n"] == 3
     assert Path(out).is_file()
+
+
+@pytest.mark.unit
+@pytest.mark.ffmpeg
+def test_sample_benchmark_reports_decode_reuse_beyond_memory_capacity(tmp_path):
+    video = make_probe_mp4(tmp_path / "clip.mp4", frames=210)
+    result = benchmark_sample_cache(video, samples=1, stride=6)
+    count = result["sampledFramesPerPass"]
+    assert count > 32
+    memory = result["trials"]["memoryOnly"][0]
+    spill = result["trials"]["diskSpill"][0]
+    assert memory["decodedSamples"] == count * 2
+    assert spill["decodedSamples"] == count
+    assert spill["cacheHits"] == count

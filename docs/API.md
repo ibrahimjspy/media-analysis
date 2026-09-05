@@ -7,7 +7,8 @@ private network.
 
 ## Authentication
 
-`GET /health` and `GET /ready` are unauthenticated for container probes.
+`GET /health`, `GET /ready`, and `GET /metrics` are unauthenticated for private
+container probes and metrics scraping.
 Every analysis and cancellation request requires:
 
 ```http
@@ -66,9 +67,9 @@ logical request hash.
 - Subject tracks are not identities, and OCR returns regions rather than text.
 - Generated artifacts include byte counts and SHA-256 digests.
 - Provisional measurements include versioned policy identifiers.
-- `telemetry` reports per-stage wall time, downloaded bytes, decoded frames,
-  decoded pixels, and uploaded bytes. It is additive diagnostics and is not
-  part of request identity.
+- `telemetry` reports per-stage wall time, rolling stage p50/p95, downloaded and
+  uploaded bytes, frame-cache activity, decoded frames, and decoded pixels. It
+  is additive diagnostics and is not part of request identity.
 - `provenance.ffmpegBuild` records the worker's `ffmpeg`/`ffprobe` version and
   configure line. `provenance.runtimeBuild` records Python, ONNX Runtime,
   OpenCV, and NumPy versions.
@@ -99,6 +100,11 @@ upload boundaries. Partial artifacts are not published as successful results.
 configured mode can serve requests; it does not mean all production parity
 gates are open. Deploy production inference only when
 `productionInferenceReady` is also `true`.
+
+`GET /metrics` returns rolling `count`, `p50Ms`, and `p95Ms` per stage (including
+download, decode, shots, faces, OCR, audio, matte, and upload stages). Use these
+worker-local distributions as autoscaling inputs after aggregation by the
+metrics collector.
 
 ## Errors
 

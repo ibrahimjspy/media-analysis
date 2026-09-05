@@ -137,8 +137,13 @@ def infer_modnet_alpha(
     return postprocess_modnet(outputs[0], orig_height=orig_h, orig_width=orig_w)
 
 
-def load_modnet_session(model_path: Path) -> Any:
-    """Load vendored MODNet ONNX via ONNX Runtime CPU."""
+def load_modnet_session(
+    model_path: Path,
+    *,
+    execution_provider: str = "auto",
+    engine_cache_dir: Path | None = None,
+) -> Any:
+    """Load MODNet with TensorRT/CUDA preference and FP16 engine optimization."""
     if not model_path.is_file():
         raise FileNotFoundError(f"MODNet model not found: {model_path}")
     try:
@@ -148,11 +153,50 @@ def load_modnet_session(model_path: Path) -> Any:
 
     options = ort.SessionOptions()
     options.intra_op_num_threads = 1
-    return ort.InferenceSession(
+    available = set(ort.get_available_providers())
+    normalized = execution_provider.strip().lower()
+    if normalized not in {"auto", "tensorrt", "cuda", "cpu"}:
+        raise ValueError("unknown matte execution provider")
+    required = {
+        "tensorrt": "TensorrtExecutionProvider",
+        "cuda": "CUDAExecutionProvider",
+        "cpu": "CPUExecutionProvider",
+    }.get(normalized)
+    if required is not None and required not in available:
+        raise RuntimeError(f"requested {normalized} execution provider is unavailable")
+
+    providers: list[Any] = []
+    if normalized in {"auto", "tensorrt"} and "TensorrtExecutionProvider" in available:
+        cache_dir = engine_cache_dir or Path("/var/tmp/media-analysis/tensorrt")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        providers.append(
+            (
+                "TensorrtExecutionProvider",
+                {
+                    "trt_fp16_enable": True,
+                    "trt_engine_cache_enable": True,
+                    "trt_engine_cache_path": str(cache_dir),
+                },
+            )
+        )
+    if normalized in {"auto", "tensorrt", "cuda"} and "CUDAExecutionProvider" in available:
+        providers.append("CUDAExecutionProvider")
+    if normalized == "cpu" or (normalized == "auto" and not providers):
+        providers.append("CPUExecutionProvider")
+    if normalized != "auto" and not providers:
+        raise RuntimeError(f"requested {normalized} execution provider is unavailable")
+    session = ort.InferenceSession(
         str(model_path),
         sess_options=options,
-        providers=["CPUExecutionProvider"],
+        providers=providers,
     )
+    # The ORT package can advertise an EP whose shared libraries fail to load.
+    # Check the actual session as well as the package's compiled-in providers.
+    if required is not None and required not in session.get_providers():
+        raise RuntimeError(f"requested {normalized} execution provider failed to initialize")
+    if required is not None:
+        session.disable_fallback()
+    return session
 
 
 def preprocessing_version() -> str:

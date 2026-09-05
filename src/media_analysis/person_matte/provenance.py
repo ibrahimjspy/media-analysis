@@ -37,11 +37,12 @@ def matte_provenance_block(
     *,
     modnet_entry: ModelEntry | None,
     lock: ModelLock | None = None,
+    runtime: str = "onnxruntime",
 ) -> dict[str, Any]:
     block: dict[str, Any] = {
         "matteTemporalPolicyVersion": temporal_policy_version(),
     }
-    model = modnet_model_provenance(modnet_entry)
+    model = modnet_model_provenance(modnet_entry, runtime=runtime)
     if model is not None:
         block["matteModel"] = model
     if lock is not None and lock.gates is not None:

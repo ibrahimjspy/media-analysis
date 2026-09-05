@@ -32,6 +32,14 @@ def test_ready_true_after_stub_models_match(client: TestClient) -> None:
         "PP-OCRv5_mobile_det",
         "silero-vad",
     ]
+    assert body["workerRole"] == "combined"
+
+
+@pytest.mark.e2e
+def test_metrics_exposes_stage_percentiles_without_auth(client: TestClient) -> None:
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "stageLatencyPercentiles" in response.json()
 
 
 @pytest.mark.e2e

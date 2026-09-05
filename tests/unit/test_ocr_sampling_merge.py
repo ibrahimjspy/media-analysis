@@ -21,8 +21,8 @@ def test_detection_in_top_and_bottom_rois() -> None:
 
 
 @pytest.mark.unit
-def test_sample_frames_uses_1000ms_cadence_version() -> None:
-    assert OCR_SAMPLER_VERSION.endswith("1000ms-1.0.0")
+def test_sample_frames_uses_1000ms_fallback_without_shots() -> None:
+    assert "scene-keyframes" in OCR_SAMPLER_VERSION
     fps = Rational(30, 1)
     frames = sample_ocr_frames(120, fps, None)
     gap_frames = max(1, int(round(MAX_SAMPLE_GAP_MS * fps.numerator / (fps.denominator * 1000))))
@@ -44,7 +44,19 @@ def test_sample_frames_is_deterministic_with_gap_and_shot_burst() -> None:
     assert 119 in first
     assert 60 in first
     assert 59 in first
+    assert 30 in first
+    assert 90 in first
     assert all(0 <= frame < 120 for frame in first)
+
+
+@pytest.mark.unit
+def test_shot_timeline_avoids_full_periodic_ocr_scan() -> None:
+    fps = Rational(30, 1)
+    shots = [{"startFrame": 0, "endFrameExclusive": 300}]
+    frames = sample_ocr_frames(300, fps, shots)
+    assert 150 in frames
+    assert 30 not in frames
+    assert len(frames) < len(sample_ocr_frames(300, fps, None))
 
 
 @pytest.mark.unit

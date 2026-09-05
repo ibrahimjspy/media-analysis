@@ -57,6 +57,42 @@ def test_stub_artifacts_are_explicitly_allowed_for_tests(tmp_path: Path) -> None
 
 
 @pytest.mark.unit
+def test_worker_roles_only_publish_their_own_loaded_models(tmp_path: Path) -> None:
+    write_stub_models(tmp_path)
+    general = load_runtime(
+        Settings(
+            media_analysis_model_dir=tmp_path,
+            media_analysis_allow_stub_models=True,
+            media_analysis_worker_role="general",
+        )
+    )
+    ocr = load_runtime(
+        Settings(
+            media_analysis_model_dir=tmp_path,
+            media_analysis_allow_stub_models=True,
+            media_analysis_worker_role="ocr",
+        )
+    )
+    assert general.loaded_models == ("yolox-tiny", "yunet", "silero-vad")
+    assert ocr.loaded_models == ("PP-OCRv5_mobile_det",)
+
+
+@pytest.mark.unit
+def test_general_worker_does_not_require_ocr_artifact(tmp_path: Path) -> None:
+    write_stub_models(tmp_path)
+    (tmp_path / "PP-OCRv5_mobile_det.onnx").unlink()
+    state = load_runtime(
+        Settings(
+            media_analysis_model_dir=tmp_path,
+            media_analysis_allow_stub_models=True,
+            media_analysis_worker_role="general",
+        )
+    )
+    assert state.ready is True
+    assert "PP-OCRv5_mobile_det" not in state.loaded_models
+
+
+@pytest.mark.unit
 def test_checksum_valid_but_unloadable_model_is_not_ready(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
