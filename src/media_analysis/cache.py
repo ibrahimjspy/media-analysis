@@ -167,7 +167,9 @@ class LocalMediaCache:
                 stat = path.stat()
             except FileNotFoundError:
                 continue
-            if self.ttl_sec and now - stat.st_mtime > self.ttl_sec:
+            # Publication must survive both TTL and budget eviction until its
+            # caller receives the entry, even if pruning was delayed.
+            if path != protect and self.ttl_sec and now - stat.st_mtime > self.ttl_sec:
                 path.unlink(missing_ok=True)
                 continue
             total += stat.st_size

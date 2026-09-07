@@ -37,6 +37,35 @@ def test_cache_prunes_expired_entries(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("kind", ["file", "json"])
+def test_publication_survives_expiry_during_pruning(tmp_path: Path, monkeypatch, kind):
+    cache = LocalMediaCache(tmp_path / "cache", max_bytes=1024, ttl_sec=60)
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"video")
+    old = cache.put_file("source", cache.stable_key("old"), source, suffix=".media")
+    prune = cache._prune_locked
+
+    def delayed_prune(*, protect):
+        # Deterministic elapsed time: no scheduling-sensitive sleep.
+        future = protect.stat().st_mtime + 61
+        monkeypatch.setattr("media_analysis.cache.time.time", lambda: future)
+        prune(protect=protect)
+
+    monkeypatch.setattr(cache, "_prune_locked", delayed_prune)
+    key = cache.stable_key("new")
+    if kind == "file":
+        entry = cache.put_file("source", key, source, suffix=".media")
+    else:
+        entry = cache.put_json("result", key, {"status": "completed"})
+    assert entry.path.is_file()
+    assert entry.byte_count == entry.path.stat().st_size
+    assert not old.path.exists()
+    # Publication protection does not disable normal expiry on later reads.
+    assert cache.get("source" if kind == "file" else "result", key,
+                     suffix=".media" if kind == "file" else ".json") is None
+
+
+@pytest.mark.unit
 def test_cache_prunes_lru_to_byte_budget(tmp_path: Path) -> None:
     cache = LocalMediaCache(tmp_path / "cache", max_bytes=6, ttl_sec=60)
     first_key = LocalMediaCache.stable_key("first")
