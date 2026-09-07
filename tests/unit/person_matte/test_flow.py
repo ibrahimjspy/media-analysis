@@ -39,3 +39,33 @@ def test_motion_aligned_ema_does_not_leave_foreground_at_old_position():
     state.apply(previous, source_frame=0)
     actual = state.apply(current, source_frame=1, aligned_previous=current)
     np.testing.assert_array_equal(actual, current)
+
+
+@pytest.mark.unit
+def test_low_resolution_flow_restores_displacement_in_output_pixels(monkeypatch):
+    # Uneven dimensions exercise independent x/y scale factors after rounding.
+    height, width = 301, 603
+    alpha = np.zeros((height, width), np.uint8)
+    alpha[80:120, 100:140] = 255
+    frame = np.zeros((height, width, 3), np.uint8)
+
+    def flow(current_gray, previous_gray, *args):
+        work_h, work_w = current_gray.shape
+        assert max(work_h, work_w) == 256
+        assert previous_gray.shape == current_gray.shape
+        displacement = np.zeros((work_h, work_w, 2), np.float32)
+        displacement[:, :, 0] = -12 * work_w / width
+        displacement[:, :, 1] = -8 * work_h / height
+        return displacement
+
+    monkeypatch.setattr(cv2, "calcOpticalFlowFarneback", flow)
+    actual = propagate_alpha_with_flow(frame, frame, alpha)
+    assert actual.shape == alpha.shape
+    np.testing.assert_array_equal(actual[88:128, 112:152], 255)
+    assert np.count_nonzero(actual) == 40 * 40
+
+
+def test_flow_rejects_invalid_working_resolution():
+    frame = np.zeros((4, 4, 3), np.uint8)
+    with pytest.raises(ValueError):
+        propagate_alpha_with_flow(frame, frame, frame[:, :, 0], max_dimension=1)

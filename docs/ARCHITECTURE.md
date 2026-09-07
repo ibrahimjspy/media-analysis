@@ -83,6 +83,12 @@ unrequested fields to the response.
 
 ## Model lifecycle
 
+Matte motion propagation estimates backward optical flow on grayscale images
+capped at 256 pixels on the longest side. The flow field is resized and its
+x/y displacement scales restored before warping the full-resolution matte;
+output mask resolution is unchanged. This is a versioned quality/performance
+tradeoff and still needs real-person temporal-quality validation.
+
 Models are never downloaded on the first request. Build or setup tooling reads
 `models/manifest.lock.json`, downloads immutable artifacts, verifies byte size
 and SHA-256, and writes the runtime manifest. Startup then verifies and warms

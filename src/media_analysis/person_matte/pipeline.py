@@ -12,7 +12,10 @@ import cv2
 import numpy as np
 
 from media_analysis.errors import INVALID_REQUEST, TIMEOUT, UPLOAD_FAILED, AnalyzeError
-from media_analysis.person_matte.constants import MATTE_TEMPORAL_POLICY_VERSION
+from media_analysis.person_matte.constants import (
+    MATTE_FLOW_MAX_DIMENSION,
+    MATTE_TEMPORAL_POLICY_VERSION,
+)
 from media_analysis.person_matte.encoding import encoding_contract_dict, stream_matte_mp4
 from media_analysis.person_matte.modnet import OnnxInferenceSession, infer_modnet_alpha
 from media_analysis.person_matte.refinement import refine_alpha_rgb_guided
@@ -58,10 +61,20 @@ def propagate_alpha_with_flow(
     previous_bgr: np.ndarray,
     current_bgr: np.ndarray,
     previous_alpha: np.ndarray,
+    *,
+    max_dimension: int = MATTE_FLOW_MAX_DIMENSION,
 ) -> np.ndarray:
     """Map current pixels back to the previous alpha using backward optical flow."""
     previous_gray = cv2.cvtColor(previous_bgr, cv2.COLOR_BGR2GRAY)
     current_gray = cv2.cvtColor(current_bgr, cv2.COLOR_BGR2GRAY)
+    height, width = previous_gray.shape
+    if max_dimension < 2:
+        raise ValueError("flow max_dimension must be at least 2")
+    if max(height, width) > max_dimension:
+        scale = max_dimension / max(height, width)
+        size = (max(2, round(width * scale)), max(2, round(height * scale)))
+        previous_gray = cv2.resize(previous_gray, size, interpolation=cv2.INTER_AREA)
+        current_gray = cv2.resize(current_gray, size, interpolation=cv2.INTER_AREA)
     flow = cv2.calcOpticalFlowFarneback(
         current_gray,
         previous_gray,
@@ -74,7 +87,12 @@ def propagate_alpha_with_flow(
         1.2,
         0,
     )
-    height, width = previous_gray.shape
+    flow_height, flow_width = flow.shape[:2]
+    if (flow_height, flow_width) != (height, width):
+        flow = cv2.resize(flow, (width, height), interpolation=cv2.INTER_LINEAR)
+        # Displacements are measured in working-image pixels, independently per axis.
+        flow[:, :, 0] *= width / flow_width
+        flow[:, :, 1] *= height / flow_height
     grid_x, grid_y = np.meshgrid(
         np.arange(width, dtype=np.float32),
         np.arange(height, dtype=np.float32),
