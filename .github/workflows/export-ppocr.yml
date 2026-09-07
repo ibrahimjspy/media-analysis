@@ -28,7 +28,7 @@ jobs:
         run: python -m media_analysis.tools.export_ppocr --out artifacts/PP-OCRv5_mobile_det.onnx
 
       - name: Upload owned export
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ppocr-owned-export
           path: |
