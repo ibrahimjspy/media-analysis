@@ -106,6 +106,15 @@ download, decode, shots, faces, OCR, audio, matte, and upload stages). Use these
 worker-local distributions as autoscaling inputs after aggregation by the
 metrics collector.
 
+Matte jobs additionally report `matte_resize`, `matte_inference`, `matte_flow`,
+`matte_temporal`, `matte_refinement`, `matte_encode_write`, and
+`matte_encode_finalize`. Each component is aggregated over the full job before
+one timing sample is recorded (including failures). Encoding-write time is
+blocking pipe/write time; FFmpeg encodes concurrently with frame production,
+so it is not an isolated encoder CPU benchmark. `person_matte` remains the
+inclusive stage duration; do not add it to its component durations. `decode`
+and `upload_matte` report sampled-frame decode and output upload separately.
+
 ## Errors
 
 Errors are JSON and contain stable `code` and `error` fields:

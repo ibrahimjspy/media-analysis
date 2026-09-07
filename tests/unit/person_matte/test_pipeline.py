@@ -61,6 +61,7 @@ def test_pipeline_full_duration_output_range(tmp_path: Path, fill: int) -> None:
         uploads.append((body, content_type, grant))
 
     canonical = _canonical(frame_count=4)
+    records = {}
     candidate = run_person_matte_stage1(
         frames=_frames(4, 64, 64, fill),
         canonical=canonical,
@@ -70,7 +71,11 @@ def test_pipeline_full_duration_output_range(tmp_path: Path, fill: int) -> None:
         session=FakeModnetSession(),
         upload=put,
         work_dir=tmp_path,
+        record_stage=records.__setitem__,
     )
+    assert {"matte_inference", "matte_flow", "matte_refinement", "matte_temporal",
+            "matte_resize", "matte_encode_write", "matte_encode_finalize"} <= records.keys()
+    assert all(value >= 0 for value in records.values())
     assert len(uploads) == 1
     body, mime, grant = uploads[0]
     assert mime == "video/mp4"

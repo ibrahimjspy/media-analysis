@@ -2,6 +2,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 
@@ -36,6 +37,35 @@ def make_probe_mp4(path: Path, *, frames: int = 6) -> Path:
         capture_output=True,
     )
     return path
+
+
+@pytest.mark.unit
+@pytest.mark.ffmpeg
+def test_sequential_matte_scan_does_not_seek_each_frame(tmp_path, monkeypatch):
+    video = make_probe_mp4(tmp_path / "scan.mp4", frames=60)
+    capture = cv2.VideoCapture
+    seeks = []
+
+    class ObservedCapture:
+        def __init__(self, path):
+            self.inner = capture(path)
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def set(self, prop, value):
+            if prop == cv2.CAP_PROP_POS_FRAMES:
+                seeks.append(value)
+            return self.inner.set(prop, value)
+
+    monkeypatch.setattr("media_analysis.frame_access.cv2.VideoCapture", ObservedCapture)
+    with BoundedFrameAccess(video, config=FrameAccessConfig(
+        max_cached_frames=1, max_spill_bytes=0,
+    )) as frames:
+        for index in range(60):
+            assert frames.read_bgr(index).shape == (120, 160, 3)
+        assert frames.unique_decodes == 60
+    assert len(seeks) <= 1
 
 
 @pytest.mark.unit

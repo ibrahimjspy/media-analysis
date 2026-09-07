@@ -16,6 +16,7 @@ from media_analysis.person_matte.constants import (
     MATTE_ENCODING_RECIPE,
     MAX_GOP_FRAMES,
 )
+from media_analysis.person_matte.timing import MatteTimings
 
 
 def encoding_contract_dict() -> dict[str, Any]:
@@ -85,9 +86,11 @@ def stream_matte_mp4(
     timeout_sec: float | None = None,
     deadline: float | None = None,
     cancel_check: Callable[[], None] | None = None,
+    timings: MatteTimings | None = None,
 ) -> int:
     """Stream grayscale frames to ffmpeg stdin; returns encoded frame count."""
     dest.parent.mkdir(parents=True, exist_ok=True)
+    timings = timings or MatteTimings()
     expected_bytes = width * height
     fps_arg = rational_framerate(fps)
     cmd = [
@@ -158,12 +161,14 @@ def stream_matte_mp4(
                     DECODE_FAILED,
                     f"Matte frame {index} byte length mismatch",
                 )
-            proc.stdin.write(frame)
+            with timings.measure("matte_encode_write"):
+                proc.stdin.write(frame)
             frame_count += 1
-        proc.stdin.close()
-        proc.stdin = None
-        remaining = _remaining(deadline) if deadline is not None else timeout_sec
-        _, stderr = proc.communicate(timeout=remaining)
+        with timings.measure("matte_encode_finalize"):
+            proc.stdin.close()
+            proc.stdin = None
+            remaining = _remaining(deadline) if deadline is not None else timeout_sec
+            _, stderr = proc.communicate(timeout=remaining)
         if proc.returncode != 0:
             detail = stderr.decode("utf-8", errors="replace")[:240]
             raise AnalyzeError(DECODE_FAILED, f"Could not encode matte MP4: {detail}")

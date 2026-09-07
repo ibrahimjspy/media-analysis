@@ -1408,6 +1408,7 @@ def _compute_matte(
                     cancel_check=stage_check,
                     deadline=min(deadline, stage_check.stage_deadline),
                     keyframe_interval=settings.media_analysis_matte_keyframe_interval,
+                    record_stage=telemetry.record_stage,
                 )
                 telemetry.unique_frames_decoded = frame_access.unique_decodes
                 telemetry.frame_cache_hits = frame_access.cache_hits

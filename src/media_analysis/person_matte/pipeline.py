@@ -17,6 +17,7 @@ from media_analysis.person_matte.encoding import encoding_contract_dict, stream_
 from media_analysis.person_matte.modnet import OnnxInferenceSession, infer_modnet_alpha
 from media_analysis.person_matte.refinement import refine_alpha_rgb_guided
 from media_analysis.person_matte.temporal import TemporalMatteState
+from media_analysis.person_matte.timing import MatteTimings
 from media_analysis.person_matte.types import (
     CanonicalMediaSpec,
     MatteOutputGrant,
@@ -102,7 +103,9 @@ def _iter_refined_gray_frames(
     keyframe_interval: int,
     cancel_check: Callable[[], None] | None,
     deadline: float | None,
+    timings: MatteTimings | None = None,
 ) -> Iterator[bytes]:
+    timings = timings or MatteTimings()
     if keyframe_interval < 1:
         raise ValueError("keyframe_interval must be positive")
     expected = 0
@@ -117,7 +120,8 @@ def _iter_refined_gray_frames(
         expected += 1
         _check_cancel(cancel_check)
         _check_deadline(deadline)
-        resized = _resize_bgr(frame_bgr, matte_w, matte_h)
+        with timings.measure("matte_resize"):
+            resized = _resize_bgr(frame_bgr, matte_w, matte_h)
         is_keyframe = (
             source_frame == 0
             or source_frame % keyframe_interval == 0
@@ -129,16 +133,22 @@ def _iter_refined_gray_frames(
         if previous_frame is not None and previous_alpha is not None and not (
             temporal.should_reset(source_frame)
         ):
-            aligned_previous = propagate_alpha_with_flow(previous_frame, resized, previous_alpha)
+            with timings.measure("matte_flow"):
+                aligned_previous = propagate_alpha_with_flow(
+                    previous_frame, resized, previous_alpha,
+                )
         if is_keyframe:
-            raw_alpha = infer_modnet_alpha(session, resized)
+            with timings.measure("matte_inference"):
+                raw_alpha = infer_modnet_alpha(session, resized)
         else:
             assert aligned_previous is not None
             raw_alpha = aligned_previous
-        stabilized = temporal.apply(
-            raw_alpha, source_frame=source_frame, aligned_previous=aligned_previous,
-        )
-        refined = refine_alpha_rgb_guided(stabilized, resized)
+        with timings.measure("matte_temporal"):
+            stabilized = temporal.apply(
+                raw_alpha, source_frame=source_frame, aligned_previous=aligned_previous,
+            )
+        with timings.measure("matte_refinement"):
+            refined = refine_alpha_rgb_guided(stabilized, resized)
         previous_frame = resized
         previous_alpha = refined
         yield refined.tobytes()
@@ -162,6 +172,7 @@ def run_person_matte_stage1(
     cancel_check: Callable[[], None] | None = None,
     deadline: float | None = None,
     keyframe_interval: int = 3,
+    record_stage: Callable[[str, int], None] | None = None,
 ) -> PersonMatteCandidate:
     """Keyframe MODNet inference with temporal propagation and one final PUT."""
     facts = coerce_mapping(prior_facts, field_name="priorFacts")
@@ -177,25 +188,28 @@ def run_person_matte_stage1(
     temporal = TemporalMatteState(shots)
     dest = work_dir / "matte.mp4"
 
-    encoded_count = stream_matte_mp4(
-        _iter_refined_gray_frames(
-            frames,
-            canonical=canonical,
-            matte_w=matte_w,
-            matte_h=matte_h,
-            session=session,
-            temporal=temporal,
-            keyframe_interval=keyframe_interval,
-            cancel_check=cancel_check,
+    with MatteTimings(record_stage) as timings:
+        encoded_count = stream_matte_mp4(
+            _iter_refined_gray_frames(
+                frames,
+                canonical=canonical,
+                matte_w=matte_w,
+                matte_h=matte_h,
+                session=session,
+                temporal=temporal,
+                keyframe_interval=keyframe_interval,
+                cancel_check=cancel_check,
+                deadline=deadline,
+                timings=timings,
+            ),
+            width=matte_w,
+            height=matte_h,
+            fps=canonical.fps,
+            dest=dest,
             deadline=deadline,
-        ),
-        width=matte_w,
-        height=matte_h,
-        fps=canonical.fps,
-        dest=dest,
-        deadline=deadline,
-        cancel_check=cancel_check,
-    )
+            cancel_check=cancel_check,
+            timings=timings,
+        )
     if encoded_count != canonical.frame_count:
         raise AnalyzeError(
             INVALID_REQUEST,
