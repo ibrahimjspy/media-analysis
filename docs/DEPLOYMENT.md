@@ -107,6 +107,11 @@ production profile still requires approved visual-quality, benchmark, and decode
 cross-consumer parity gates. Numerical export parity is recorded in
 [modnet-owned-export.md](modnet-owned-export.md); it does not establish visual quality.
 
+`MEDIA_ANALYSIS_MATTE_INFERENCE_THREADS` controls ONNX Runtime intra-op CPU
+threads (1–8, default 1). Match this to the container's CPU quota and benchmark
+before increasing it; threads beyond the available CPU budget can hurt latency.
+The dev EC2 two-CPU evaluation worker uses 2 after a measured comparison.
+
 `docker/matte-gpu.Dockerfile` is the fail-fast production runtime target. It
 pins the compatible TensorRT 10.9/ONNX Runtime GPU 1.22 stack, selects
 `TensorrtExecutionProvider`, enables FP16 engine caching, and does not enable

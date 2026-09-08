@@ -142,17 +142,20 @@ def load_modnet_session(
     *,
     execution_provider: str = "auto",
     engine_cache_dir: Path | None = None,
+    inference_threads: int = 1,
 ) -> Any:
     """Load MODNet with TensorRT/CUDA preference and FP16 engine optimization."""
     if not model_path.is_file():
         raise FileNotFoundError(f"MODNet model not found: {model_path}")
+    if not 1 <= inference_threads <= 8:
+        raise ValueError("matte inference_threads must be between 1 and 8")
     try:
         import onnxruntime as ort
     except ImportError as exc:
         raise RuntimeError("onnxruntime is required for MODNet") from exc
 
     options = ort.SessionOptions()
-    options.intra_op_num_threads = 1
+    options.intra_op_num_threads = inference_threads
     available = set(ort.get_available_providers())
     normalized = execution_provider.strip().lower()
     if normalized not in {"auto", "tensorrt", "cuda", "cpu"}:

@@ -147,6 +147,7 @@ def load_runtime(settings: Settings) -> RuntimeState:
                     _model_path(settings, manifest, "modnet"),
                     execution_provider=settings.media_analysis_matte_execution_provider,
                     engine_cache_dir=settings.media_analysis_tensorrt_cache_dir,
+                    inference_threads=settings.media_analysis_matte_inference_threads,
                 )
                 infer_modnet_alpha(
                     modnet_session,

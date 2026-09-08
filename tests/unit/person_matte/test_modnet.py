@@ -148,3 +148,31 @@ def test_requested_gpu_provider_must_be_available(tmp_path, monkeypatch) -> None
     model.write_bytes(b"model")
     with pytest.raises(RuntimeError, match="unavailable"):
         load_modnet_session(model, execution_provider="cuda")
+
+
+@pytest.mark.unit
+def test_cpu_inference_thread_budget_is_forwarded(tmp_path, monkeypatch):
+    captured = {}
+
+    def create(*args, **kwargs):
+        captured['threads'] = kwargs['sess_options'].intra_op_num_threads
+        return SimpleNamespace(get_providers=lambda: ['CPUExecutionProvider'],
+                               disable_fallback=lambda: None)
+
+    monkeypatch.setitem(sys.modules, 'onnxruntime', SimpleNamespace(
+        SessionOptions=lambda: SimpleNamespace(),
+        get_available_providers=lambda: ['CPUExecutionProvider'], InferenceSession=create,
+    ))
+    model = tmp_path / 'modnet.onnx'
+    model.write_bytes(b'model')
+    load_modnet_session(model, execution_provider='cpu', inference_threads=2)
+    assert captured['threads'] == 2
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('threads', [0, -1, 9])
+def test_invalid_inference_thread_budget_is_rejected(tmp_path, threads):
+    model = tmp_path / 'modnet.onnx'
+    model.write_bytes(b'model')
+    with pytest.raises(ValueError, match='inference_threads'):
+        load_modnet_session(model, inference_threads=threads)

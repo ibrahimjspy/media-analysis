@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     media_analysis_cache_ttl_sec: float = Field(default=24 * 60 * 60, ge=0)
     media_analysis_matte_keyframe_interval: int = Field(default=3, ge=1, le=30)
     media_analysis_matte_execution_provider: str = "auto"
+    media_analysis_matte_inference_threads: int = Field(default=1, ge=1, le=8)
     media_analysis_tensorrt_cache_dir: Path = Path(
         "/var/tmp/media-analysis/tensorrt"
     )
