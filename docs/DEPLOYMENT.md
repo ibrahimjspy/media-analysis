@@ -101,17 +101,17 @@ Production image properties:
 - `/ready` distinguishes mechanical serving readiness from production parity
 
 The checked-in `matte-cpu.Dockerfile` is explicitly a Stage 1 reference image. It enables
-`MEDIA_ANALYSIS_MATTE_REFERENCE_MODE=1`, uses a stub MODNet artifact, and must report
+`MEDIA_ANALYSIS_MATTE_REFERENCE_MODE=1`, uses a real owned MODNet evaluation artifact, and must report
 `productionInferenceReady: false`. Do not deploy it as a production matte worker. A
-production profile requires an owned immutable MODNet export plus benchmark and decoded-luma
-cross-consumer parity gates.
+production profile still requires approved visual-quality, benchmark, and decoded-luma
+cross-consumer parity gates. Numerical export parity is recorded in
+[modnet-owned-export.md](modnet-owned-export.md); it does not establish visual quality.
 
 `docker/matte-gpu.Dockerfile` is the fail-fast production runtime target. It
 pins the compatible TensorRT 10.9/ONNX Runtime GPU 1.22 stack, selects
 `TensorrtExecutionProvider`, enables FP16 engine caching, and does not enable
-reference mode. With the current stub/closed model lock it intentionally cannot
-become ready; build/deploy it only after replacing the matte profile with the
-approved owned export and opening the existing gates.
+reference mode. With the current closed quality gates it intentionally cannot
+become ready; deploy it only after approving the model and opening the existing gates.
 
 ## OpenCV / PySceneDetect
 

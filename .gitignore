@@ -24,6 +24,7 @@ models/**
 !models/manifest.json
 !models/manifest.lock.json
 !models/ppocr-export.lock.json
+!models/modnet-export.lock.json
 !models/README.md
 
 *.mp4

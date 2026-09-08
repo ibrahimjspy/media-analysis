@@ -77,26 +77,28 @@
       "gates": {
         "matteProductionEnabled": false,
         "benchmarkGatePassed": false,
-        "note": "No verified immutable official MODNet ONNX release exists. ZHKKKe/MODNet ships export script (onnx/export_onnx.py) only; community Google Drive ONNX is not pinned. Production gate remains off until an owned export is recorded with pinned SHA/revision/size."
+        "note": "Owned photographic MODNet export and numerical parity are recorded. Evaluation only: backlit-subject quality, temporal quality, browser compositing, GPU and production latency gates remain open."
       },
       "models": [
         {
           "name": "modnet",
           "file": "modnet.onnx",
-          "url": "stub://local",
-          "revision": "stub-stage1-reference",
-          "sha256": "4d4a1e90e115a7cfe0f315ee09331f8d316af70727f37a37c52f7533cabf65af",
+          "url": "https://github.com/ibrahimjspy/media-analysis/releases/download/models-modnet-photographic-v1/modnet.onnx",
+          "revision": "owned-modnet-photographic-opset17-v1",
+          "sha256": "ef7427677ad06c4dcdd0ed385538a79882e243dc189433c7a8db7a946213701b",
           "license": "Apache-2.0",
-          "sizeBytes": 11,
-          "stub": true,
+          "sizeBytes": 25961158,
+          "stub": false,
           "provenance": {
-            "artifactKind": "blocked-no-immutable-onnx",
+            "artifactKind": "owned-export",
             "upstreamOfficialProject": "ZHKKKe/MODNet",
-            "upstreamOfficialRevision": "master",
+            "upstreamOfficialRevision": "28165a451e4610c9d77cfdf925a94610bb2810fb",
             "upstreamLicense": "Apache-2.0",
-            "onnxExportScript": "https://github.com/ZHKKKe/MODNet/blob/master/onnx/export_onnx.py",
-            "communityOnnxNote": "Community ONNX linked from onnx/README.md (Google Drive) is not an immutable official release",
-            "productionBlocker": "No verified immutable official MODNet ONNX with pinned SHA, revision, and size"
+            "exportRecipe": "models/modnet-export.lock.json",
+            "checkpointSha256": "7c22235f0925deba15d4d63e53afcb654c47055bbcd98f56e393ab2584007ed8",
+            "parityFixtureUrl": "https://github.com/ibrahimjspy/media-analysis/releases/download/models-modnet-photographic-v1/modnet.parity.npz",
+            "parityFixtureSha256": "efbdfa1256a7e5ba3cfc6d654d3aaa4e83bc53332a5b8d63444d3d1c34014966",
+            "productionBlocker": "Real-person quality and GPU/latency validation are not approved"
           }
         }
       ]

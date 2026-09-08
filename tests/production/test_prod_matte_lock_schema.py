@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -20,10 +21,13 @@ DOCKERFILE = REPO_ROOT / "docker" / "matte-cpu.Dockerfile"
 
 @pytest.mark.production
 @pytest.mark.unit
-def test_prod_matte_cpu_lock_has_modnet_stub_only() -> None:
+def test_prod_matte_cpu_lock_has_real_pinned_modnet_but_closed_quality_gates() -> None:
     lock = load_lock(LOCK_PATH, profile="matte-cpu")
     names = {item.name for item in lock.models}
     assert names == {"modnet"}
+    assert lock.models[0].stub is False
+    assert lock.models[0].size_bytes > 20_000_000
+    assert lock.models[0].provenance.owned_export_recorded is True
     assert lock.gates is not None
     assert lock.gates.matte_production_enabled is False
     assert lock.gates.benchmark_gate_passed is False
@@ -34,7 +38,6 @@ def test_prod_matte_cpu_lock_has_modnet_stub_only() -> None:
 def test_prod_matte_stub_never_production_ready() -> None:
     lock = load_lock(LOCK_PATH, profile="matte-cpu")
     entry = lock.models[0]
-    assert entry.stub is True
     ready, errors = matte_worker_ready_for_production(
         modnet_entry=ModelEntry(
             name=entry.name,
@@ -68,7 +71,7 @@ def test_prod_matte_manifest_verify_does_not_imply_production_ready(tmp_path: Pa
             {
                 "name": entry.name,
                 "file": entry.file,
-                "sha256": entry.sha256,
+                "sha256": hashlib.sha256(b"stub-modnet").hexdigest(),
                 "license": entry.license,
                 "version": entry.revision,
                 "stub": True,

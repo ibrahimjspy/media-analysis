@@ -1,0 +1,15 @@
+{
+  "upstreamRepository": "https://github.com/ZHKKKe/MODNet.git",
+  "upstreamRevision": "28165a451e4610c9d77cfdf925a94610bb2810fb",
+  "checkpointUrl": "https://drive.google.com/uc?id=1mcr7ALciuAsHCpLnrtG_eop5-EYhbCmz",
+  "checkpointSha256": "7c22235f0925deba15d4d63e53afcb654c47055bbcd98f56e393ab2584007ed8",
+  "checkpointSizeBytes": 26255603,
+  "license": "Apache-2.0",
+  "torch": "2.5.1",
+  "torchvision": "0.20.1",
+  "onnx": "1.17.0",
+  "opset": 17,
+  "paritySeed": 20260908,
+  "parityMaxAbsTolerance": 0.0005,
+  "parityMeanAbsTolerance": 0.00005
+}

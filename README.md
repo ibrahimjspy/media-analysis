@@ -27,7 +27,8 @@ This service only measures. Downstream products decide what to keep, trim, or pl
 ready for integration testing, but OCR is not yet production-validated because the owned
 PP-OCR export parity gate remains closed. v2 Stage 1 is
 implemented as an explicitly gated `matte-cpu` reference worker; production matte
-serving remains blocked until an owned immutable MODNet export and parity benchmarks exist.
+serving remains blocked on quality and production benchmarks. A real owned MODNet
+export is now pinned for evaluation; see [model validation status](docs/modnet-owned-export.md).
 
 ## What this is not
 

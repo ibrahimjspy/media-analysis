@@ -1419,7 +1419,10 @@ def _compute_matte(
             "version": MATTE_TEMPORAL_POLICY_VERSION,
         }
         if runtime.reference_mode:
-            warnings.append("MATTE_REFERENCE_MODE")
+            warnings.append(
+                "MATTE_REFERENCE_MODE" if modnet_entry is None or modnet_entry.stub
+                else "MATTE_EVALUATION_MODE"
+            )
     except AnalyzeError:
         raise
     except Exception:
