@@ -83,26 +83,27 @@ def upsample_alpha_image_guided(alpha: np.ndarray, image_bgr: np.ndarray) -> np.
 
     foreground, fg_support = anchors(fg_weight)
     background, bg_support = anchors(bg_weight)
+    upsampled = cv2.resize(prior, (width, height), interpolation=cv2.INTER_LINEAR)
+    # Opaque/background regions cannot change. Avoid full-frame color algebra.
+    rows, columns = np.nonzero(
+        (upsampled > 0.02) & (upsampled < 0.98) & (fg_support > 0.01) & (bg_support > 0.01)
+    )
+    foreground = foreground[rows, columns]
+    background = background[rows, columns]
+    pixels = source[rows, columns]
     delta = foreground - background
-    contrast = np.sum(delta * delta, axis=2)
+    contrast = np.sum(delta * delta, axis=1)
     projected = np.clip(
-        np.sum((source - background) * delta, axis=2) / np.maximum(contrast, 1e-6),
+        np.sum((pixels - background) * delta, axis=1) / np.maximum(contrast, 1e-6),
         0,
         1,
     )
     residual = np.sum(
-        (source - background - projected[:, :, None] * delta) ** 2,
-        axis=2,
+        (pixels - background - projected[:, None] * delta) ** 2,
+        axis=1,
     )
-    upsampled = cv2.resize(prior, (width, height), interpolation=cv2.INTER_LINEAR)
-    reliable = (
-        (fg_support > 0.01)
-        & (bg_support > 0.01)
-        & (contrast > 0.0004)
-        & (residual < np.maximum(0.001, contrast * 0.1))
-        & (upsampled > 0.02)
-        & (upsampled < 0.98)
-    )
+    reliable = (contrast > 0.0004) & (residual < np.maximum(0.001, contrast * 0.1))
     strength = np.clip((contrast - 0.0004) / 0.0021, 0, 1) * reliable
-    refined = upsampled + strength * (projected - upsampled)
-    return np.rint(np.clip(refined, 0, 1) * 255).astype(np.uint8)
+    prior_band = upsampled[rows, columns]
+    upsampled[rows, columns] = prior_band + strength * (projected - prior_band)
+    return np.rint(np.clip(upsampled, 0, 1) * 255).astype(np.uint8)
