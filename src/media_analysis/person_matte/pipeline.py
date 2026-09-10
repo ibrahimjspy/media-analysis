@@ -13,12 +13,13 @@ import numpy as np
 
 from media_analysis.errors import INVALID_REQUEST, TIMEOUT, UPLOAD_FAILED, AnalyzeError
 from media_analysis.person_matte.constants import (
+    MATTE_COLD_START_FRAMES,
     MATTE_FLOW_MAX_DIMENSION,
     MATTE_TEMPORAL_POLICY_VERSION,
 )
 from media_analysis.person_matte.encoding import encoding_contract_dict, stream_matte_mp4
 from media_analysis.person_matte.modnet import OnnxInferenceSession, infer_modnet_alpha
-from media_analysis.person_matte.refinement import refine_alpha_rgb_guided
+from media_analysis.person_matte.refinement import upsample_alpha_image_guided
 from media_analysis.person_matte.temporal import TemporalMatteState
 from media_analysis.person_matte.timing import MatteTimings
 from media_analysis.person_matte.types import (
@@ -55,6 +56,22 @@ def _resize_bgr(frame_bgr: np.ndarray, width: int, height: int) -> np.ndarray:
     if frame_bgr.shape[1] == width and frame_bgr.shape[0] == height:
         return frame_bgr
     return cv2.resize(frame_bgr, (width, height), interpolation=cv2.INTER_AREA)
+
+
+def appearance_cut(previous_bgr: np.ndarray, current_bgr: np.ndarray) -> bool:
+    """Conservative fallback when the supplied shot timeline misses a hard cut."""
+    previous = cv2.cvtColor(cv2.resize(previous_bgr, (64, 64)), cv2.COLOR_BGR2GRAY)
+    current = cv2.cvtColor(cv2.resize(current_bgr, (64, 64)), cv2.COLOR_BGR2GRAY)
+    difference = float(np.mean(cv2.absdiff(previous, current))) / 255.0
+    if difference > 0.22:
+        return True
+    if difference <= 0.08:
+        return False
+    histograms = []
+    for gray in (previous, current):
+        hist = cv2.calcHist([gray], [0], None, [32], [0, 256])
+        histograms.append(cv2.normalize(hist, hist).reshape(-1))
+    return cv2.compareHist(*histograms, cv2.HISTCMP_BHATTACHARYYA) > 0.6
 
 
 def propagate_alpha_with_flow(
@@ -129,6 +146,7 @@ def _iter_refined_gray_frames(
     expected = 0
     previous_frame: np.ndarray | None = None
     previous_alpha: np.ndarray | None = None
+    cold_until = MATTE_COLD_START_FRAMES
     for source_frame, frame_bgr in frames:
         if source_frame != expected:
             raise AnalyzeError(
@@ -139,21 +157,31 @@ def _iter_refined_gray_frames(
         _check_cancel(cancel_check)
         _check_deadline(deadline)
         with timings.measure("matte_resize"):
-            resized = _resize_bgr(frame_bgr, matte_w, matte_h)
+            work_w, work_h = half_matte_resolution(matte_w, matte_h)
+            resized = _resize_bgr(frame_bgr, work_w, work_h)
+        reset = temporal.should_reset(source_frame) or (
+            previous_frame is not None and appearance_cut(previous_frame, resized)
+        )
+        if reset:
+            temporal.reset()
+            previous_alpha = None
+            cold_until = source_frame + MATTE_COLD_START_FRAMES
+        cold = source_frame < cold_until
         is_keyframe = (
-            source_frame == 0
+            cold
+            or source_frame == 0
             or source_frame % keyframe_interval == 0
             or temporal.should_reset(source_frame)
             or previous_frame is None
             or previous_alpha is None
         )
         aligned_previous = None
-        if previous_frame is not None and previous_alpha is not None and not (
-            temporal.should_reset(source_frame)
-        ):
+        if previous_frame is not None and previous_alpha is not None and not cold:
             with timings.measure("matte_flow"):
                 aligned_previous = propagate_alpha_with_flow(
-                    previous_frame, resized, previous_alpha,
+                    previous_frame,
+                    resized,
+                    previous_alpha,
                 )
         if is_keyframe:
             with timings.measure("matte_inference"):
@@ -161,14 +189,29 @@ def _iter_refined_gray_frames(
         else:
             assert aligned_previous is not None
             raw_alpha = aligned_previous
+        if cold or (
+            is_keyframe
+            and aligned_previous is not None
+            and float(
+                np.mean(
+                    np.abs(raw_alpha.astype(np.int16) - aligned_previous.astype(np.int16)) > 64,
+                )
+            )
+            > 0.03
+        ):
+            temporal.reset()
+            aligned_previous = None
         with timings.measure("matte_temporal"):
             stabilized = temporal.apply(
-                raw_alpha, source_frame=source_frame, aligned_previous=aligned_previous,
+                raw_alpha,
+                source_frame=source_frame,
+                aligned_previous=aligned_previous,
             )
         with timings.measure("matte_refinement"):
-            refined = refine_alpha_rgb_guided(stabilized, resized)
+            refined = upsample_alpha_image_guided(stabilized, frame_bgr)
         previous_frame = resized
-        previous_alpha = refined
+        # Do not repeatedly filter/upsample the state used by the next frame.
+        previous_alpha = stabilized
         yield refined.tobytes()
     if expected != canonical.frame_count:
         raise AnalyzeError(
@@ -202,7 +245,9 @@ def run_person_matte_stage1(
     )
     shots = validate_shot_timeline(shots, frame_count=canonical.frame_count)
 
-    matte_w, matte_h = half_matte_resolution(canonical.width, canonical.height)
+    matte_w, matte_h = canonical.width, canonical.height
+    if matte_w % 2 or matte_h % 2:
+        raise AnalyzeError(INVALID_REQUEST, "Canonical dimensions must be even for yuv420p matte")
     temporal = TemporalMatteState(shots)
     dest = work_dir / "matte.mp4"
 

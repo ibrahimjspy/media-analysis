@@ -23,6 +23,9 @@ class TemporalMatteState:
     def should_reset(self, source_frame: int) -> bool:
         return source_frame in self._shot_starts
 
+    def reset(self) -> None:
+        self._prev = None
+
     def apply(
         self,
         alpha: np.ndarray,

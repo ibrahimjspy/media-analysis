@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 MODNET_PREPROCESSING_VERSION = "modnet-onnx-ref512-norm127-aligned-1.1.0"
-MATTE_TEMPORAL_POLICY_VERSION = "keyframe-flow256-backward-aligned-ema-shot-reset-2.2.0"
+MATTE_TEMPORAL_POLICY_VERSION = "source-rgb-unmix-flow256-cut-cold6-3.0.0"
+MATTE_COLD_START_FRAMES = 6
 MATTE_FLOW_MAX_DIMENSION = 256
-RGB_GUIDED_REFINEMENT_VERSION = "rgb-guided-filter-r8-eps1e-3-1.0.0"
+RGB_GUIDED_REFINEMENT_VERSION = "source-rgb-local-unmix-r16-contrast-gated-2.0.0"
 MATTE_ENCODING_RECIPE = "matte-h264-yuv420p-fullrange-bt709-gop15-b0-1.0.1"
 
 MODNET_REF_SIZE = 512

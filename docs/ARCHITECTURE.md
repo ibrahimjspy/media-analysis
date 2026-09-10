@@ -83,6 +83,18 @@ unrequested fields to the response.
 
 ## Model lifecycle
 
+Matte policy `source-rgb-unmix-flow256-cut-cold6-3.0.0` delivers masks at the
+canonical source dimensions (even width/height required by the unchanged yuv420p
+encoding contract). Neural inference and motion propagation remain at reduced
+resolution. Source-resolution RGB guides local foreground/background color
+unmixing only in uncertain alpha regions with reliable color anchors; ambiguous
+regions retain the model alpha. This is not a plain resize or global opacity gain.
+Refined output is never fed back into temporal history. Known cuts and conservative
+appearance cuts discard history, and the first six frames use fresh inference
+without EMA blending. Large fresh-mask corrections also discard stale history.
+These policies require real-video quality checks; natural motion blur and true
+translucency must not be forced into four-pixel hard edges.
+
 Matte motion propagation estimates backward optical flow on grayscale images
 capped at 256 pixels on the longest side. The flow field is resized and its
 x/y displacement scales restored before warping the full-resolution matte;

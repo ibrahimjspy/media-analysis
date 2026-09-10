@@ -11,12 +11,13 @@ from media_analysis.errors import CANCELLED, UPLOAD_FAILED, AnalyzeError
 from media_analysis.frames import Rational
 from media_analysis.models_manifest import ModelEntry
 from media_analysis.person_matte.encoding import probe_matte_mp4
-from media_analysis.person_matte.pipeline import run_person_matte_stage1
+from media_analysis.person_matte.pipeline import _iter_refined_gray_frames, run_person_matte_stage1
 from media_analysis.person_matte.readiness import (
     matte_worker_ready_for_production,
     matte_worker_ready_for_serving,
 )
-from media_analysis.person_matte.types import CanonicalMediaSpec, MatteOutputGrant
+from media_analysis.person_matte.temporal import TemporalMatteState
+from media_analysis.person_matte.types import CanonicalMediaSpec, MatteOutputGrant, ShotBoundary
 from media_analysis.tools.model_lock import ProfileGates
 
 
@@ -73,9 +74,17 @@ def test_pipeline_full_duration_output_range(tmp_path: Path, fill: int) -> None:
         work_dir=tmp_path,
         record_stage=records.__setitem__,
     )
-    assert {"matte_inference", "matte_flow", "matte_refinement", "matte_temporal",
-            "matte_resize", "matte_encode_write", "matte_encode_finalize"} <= records.keys()
+    assert {
+        "matte_inference",
+        "matte_refinement",
+        "matte_temporal",
+        "matte_resize",
+        "matte_encode_write",
+        "matte_encode_finalize",
+    } <= records.keys()
     assert all(value >= 0 for value in records.values())
+    assert "matte_flow" not in records  # Cold-start frames use fresh inference.
+    assert candidate.matte_resolution == {"width": 64, "height": 64}
     assert len(uploads) == 1
     body, mime, grant = uploads[0]
     assert mime == "video/mp4"
@@ -87,6 +96,7 @@ def test_pipeline_full_duration_output_range(tmp_path: Path, fill: int) -> None:
     mp4_path.write_bytes(body)
     probe = probe_matte_mp4(mp4_path)
     assert len(probe["streams"]) == 1
+    assert (probe["streams"][0]["width"], probe["streams"][0]["height"]) == (64, 64)
 
 
 @pytest.mark.unit
@@ -193,18 +203,74 @@ def test_pipeline_infers_keyframes_and_propagates_between_them(tmp_path: Path) -
     session = SequenceModnetSession([0.5, 0.5])
 
     run_person_matte_stage1(
-        frames=_frames(6, 32, 32, 128),
-        canonical=_canonical(frame_count=6, width=32, height=32),
+        frames=_frames(12, 32, 32, 128),
+        canonical=_canonical(frame_count=12, width=32, height=32),
         matte_target={"mode": "all_people"},
         output_grants=_grants(),
-        prior_facts=_shots(6),
+        prior_facts=_shots(12),
         session=session,
         upload=lambda _body, _content_type, _grant: None,
         work_dir=tmp_path,
         keyframe_interval=3,
     )
 
-    assert session._index == 2
+    assert session._index == 8  # 0..5 cold, then 6 and 9.
+
+
+def _raw_frames(frames, session, shots=()):
+    return [
+        np.frombuffer(frame, np.uint8).reshape(32, 32)
+        for frame in _iter_refined_gray_frames(
+            frames,
+            canonical=_canonical(frame_count=len(frames), width=32, height=32),
+            matte_w=32,
+            matte_h=32,
+            session=session,
+            temporal=TemporalMatteState(shots),
+            keyframe_interval=3,
+            cancel_check=None,
+            deadline=None,
+        )
+    ]
+
+
+def test_declared_cut_has_immediate_opacity_and_no_six_frame_ramp():
+    frames = _frames(16, 32, 32, 128)
+    session = SequenceModnetSession([0.0] * 8 + [1.0] * 6)
+    output = _raw_frames(frames, session, (ShotBoundary(0, 10), ShotBoundary(10, 16)))
+    assert output[9].max() == 0
+    for frame in output[10:]:
+        assert frame.min() == 255
+
+
+def test_missing_shot_boundary_is_reset_from_appearance():
+    frames = _frames(10, 32, 32, 0) + [
+        (i, np.full((32, 32, 3), 255, np.uint8)) for i in range(10, 16)
+    ]
+    output = _raw_frames(frames, FakeModnetSession())
+    assert output[9].max() == 0
+    assert output[10].min() == 255
+    np.testing.assert_array_equal(output[10], output[15])
+
+
+def test_fresh_inference_correction_is_not_damped_by_empty_history():
+    output = _raw_frames(_frames(12, 32, 32, 128), SequenceModnetSession([0.0] * 7 + [1.0]))
+    assert output[8].max() == 0
+    assert output[9].min() == 255
+
+
+def test_odd_canonical_dimensions_fail_instead_of_silent_geometry_change(tmp_path):
+    with pytest.raises(AnalyzeError, match="even"):
+        run_person_matte_stage1(
+            frames=_frames(2, 31, 33, 128),
+            canonical=_canonical(frame_count=2, width=31, height=33),
+            matte_target={"mode": "all_people"},
+            output_grants=_grants(),
+            prior_facts=_shots(2),
+            session=FakeModnetSession(),
+            upload=lambda *args: None,
+            work_dir=tmp_path,
+        )
 
 
 @pytest.mark.unit

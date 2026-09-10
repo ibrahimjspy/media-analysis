@@ -44,3 +44,65 @@ def refine_alpha_rgb_guided(alpha: np.ndarray, image_bgr: np.ndarray) -> np.ndar
 
 def refinement_version() -> str:
     return RGB_GUIDED_REFINEMENT_VERSION
+
+
+def upsample_alpha_image_guided(alpha: np.ndarray, image_bgr: np.ndarray) -> np.ndarray:
+    """Recover source-resolution edges from local foreground/background RGB.
+
+    Estimate local colors from confident low-resolution alpha regions, then
+    project each original-resolution RGB pixel onto that local color mixture.
+    Only refine uncertain alpha where both anchors and color agreement exist.
+    Low-contrast/ambiguous regions retain model alpha; no global gain/threshold.
+    """
+    if alpha.ndim != 2 or image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
+        raise ValueError("expected 2D alpha and HxWx3 source image")
+    height, width = image_bgr.shape[:2]
+    low_h, low_w = alpha.shape
+    if min(height, width, low_h, low_w) < 1:
+        raise ValueError("empty matte or source image")
+    prior = alpha.astype(np.float32) / 255.0
+    fg_weight = np.clip((prior - 0.8) / 0.2, 0, 1)
+    bg_weight = np.clip((0.2 - prior) / 0.2, 0, 1)
+    if not np.any(fg_weight) or not np.any(bg_weight):
+        return np.rint(
+            cv2.resize(prior, (width, height), interpolation=cv2.INTER_LINEAR) * 255
+        ).astype(np.uint8)
+    source = image_bgr.astype(np.float32) / 255.0
+    low = cv2.resize(source, (low_w, low_h), interpolation=cv2.INTER_AREA)
+
+    def anchors(weight: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        support = _box_filter(weight, 16)
+        color = _box_filter(low * weight[:, :, None], 16) / np.maximum(
+            support[:, :, None],
+            1e-6,
+        )
+        return (
+            cv2.resize(color, (width, height), interpolation=cv2.INTER_LINEAR),
+            cv2.resize(support, (width, height), interpolation=cv2.INTER_LINEAR),
+        )
+
+    foreground, fg_support = anchors(fg_weight)
+    background, bg_support = anchors(bg_weight)
+    delta = foreground - background
+    contrast = np.sum(delta * delta, axis=2)
+    projected = np.clip(
+        np.sum((source - background) * delta, axis=2) / np.maximum(contrast, 1e-6),
+        0,
+        1,
+    )
+    residual = np.sum(
+        (source - background - projected[:, :, None] * delta) ** 2,
+        axis=2,
+    )
+    upsampled = cv2.resize(prior, (width, height), interpolation=cv2.INTER_LINEAR)
+    reliable = (
+        (fg_support > 0.01)
+        & (bg_support > 0.01)
+        & (contrast > 0.0004)
+        & (residual < np.maximum(0.001, contrast * 0.1))
+        & (upsampled > 0.02)
+        & (upsampled < 0.98)
+    )
+    strength = np.clip((contrast - 0.0004) / 0.0021, 0, 1) * reliable
+    refined = upsampled + strength * (projected - upsampled)
+    return np.rint(np.clip(refined, 0, 1) * 255).astype(np.uint8)
