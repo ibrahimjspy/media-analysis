@@ -1,0 +1,222 @@
+{
+  "request": {
+    "idempotencyKey": "native",
+    "mediaKind": "audio",
+    "features": [
+      "rhythm"
+    ],
+    "source": {
+      "signedGetUrl": "https://media.example/source",
+      "expiresAt": "2099-01-01T00:00:00Z",
+      "sha256": "d87e873768d0bdd019c195a778ab826667e0d3ce389937b20fd7f42ba93209fc"
+    }
+  },
+  "result": {
+    "schemaVersion": 2,
+    "overallStatus": "completed",
+    "requestedFeatures": [
+      "rhythm"
+    ],
+    "capabilities": {
+      "rhythm": {
+        "status": "completed"
+      }
+    },
+    "provenance": {
+      "audioDecodeVersion": "audio-ffmpeg-decoder-trim-zero-origin-v1",
+      "pcmExtractionVersion": "pcm-mono16k-1.0.0",
+      "waveformAnalyzerVersion": "waveform-v1.2.0-provisional",
+      "rhythmVersion": "rms-attack-periodic-runs-v1"
+    },
+    "warningCodes": [],
+    "mediaKind": "audio",
+    "canonicalMedia": {
+      "sourceSha256": "d87e873768d0bdd019c195a778ab826667e0d3ce389937b20fd7f42ba93209fc",
+      "canonicalizationVersion": "audio-ffmpeg-decoder-trim-zero-origin-v1",
+      "kind": "audio",
+      "durationSec": 6.0,
+      "sourceDurationSec": 6.0,
+      "codec": "pcm_s16le",
+      "sampleRate": 16000,
+      "channels": 2,
+      "sourceCodec": "pcm_s16le",
+      "sourceStartTimeSec": 0.0,
+      "analysisSampleRate": 16000,
+      "analysisSampleCount": 96000,
+      "analysisChannels": 1,
+      "clock": {
+        "origin": "first-decoded-playback-sample",
+        "analysisToPlaybackOffsetSec": 0.0,
+        "decoderDelayPolicy": "ffmpeg-applies-container-skip-samples-and-padding",
+        "sourcePtsOriginSec": 0.0
+      }
+    },
+    "rhythm": {
+      "beats": [
+        {
+          "timeSec": 0.273,
+          "sampleIndex": 4368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 0.773,
+          "sampleIndex": 12368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 1.273,
+          "sampleIndex": 20368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 1.773,
+          "sampleIndex": 28368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 2.273,
+          "sampleIndex": 36368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 2.773,
+          "sampleIndex": 44368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 3.273,
+          "sampleIndex": 52368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 3.773,
+          "sampleIndex": 60368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 4.273,
+          "sampleIndex": 68368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 4.773,
+          "sampleIndex": 76368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 5.273,
+          "sampleIndex": 84368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 5.773,
+          "sampleIndex": 92368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        }
+      ],
+      "onsetCandidates": [
+        {
+          "timeSec": 0.273,
+          "sampleIndex": 4368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 0.773,
+          "sampleIndex": 12368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 1.273,
+          "sampleIndex": 20368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 1.773,
+          "sampleIndex": 28368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 2.273,
+          "sampleIndex": 36368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 2.773,
+          "sampleIndex": 44368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 3.273,
+          "sampleIndex": 52368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 3.773,
+          "sampleIndex": 60368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 4.273,
+          "sampleIndex": 68368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 4.773,
+          "sampleIndex": 76368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 5.273,
+          "sampleIndex": 84368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        },
+        {
+          "timeSec": 5.773,
+          "sampleIndex": 92368,
+          "strength": 0.4947122633457184,
+          "scoreType": "measurement"
+        }
+      ],
+      "bpm": 120.0,
+      "segments": [
+        {
+          "startSec": 0.273,
+          "endSec": 5.773,
+          "bpm": 120.0
+        }
+      ],
+      "algorithmVersion": "rms-attack-periodic-runs-v1",
+      "sampleRate": 16000,
+      "hopSec": 0.005,
+      "timestampOrigin": "decoded-playback-start",
+      "evidenceTier": "periodic-acoustic-attacks",
+      "reasons": [
+        "HEURISTIC_NOT_MUSICALLY_VERIFIED"
+      ],
+      "productionQualified": false
+    }
+  }
+}

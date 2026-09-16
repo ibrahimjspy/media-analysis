@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 
 from media_analysis import __version__
 from media_analysis.analyze import run_analyze, validate_analyze_request
+from media_analysis.capabilities import capability_document
 from media_analysis.config import Settings, get_settings
 from media_analysis.errors import (
     INTERNAL_ERROR,
@@ -79,10 +80,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
 
+    @app.get("/capabilities")
+    def capabilities() -> dict[str, Any]:
+        return capability_document(cfg, current_runtime(cfg))
+
     @app.get("/ready")
     def ready() -> dict[str, Any]:
         state = current_runtime(cfg)
         return {
+            "capabilities": capability_document(cfg, state),
             "ready": state.ready,
             "productionInferenceReady": state.production_inference_ready,
             "productionBlockers": list(state.production_blockers),
@@ -90,6 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "version": __version__,
             "loadedModels": list(state.loaded_models),
             "warmupComplete": state.warmup_complete,
+            "runtimeInitializationMs": state.initialization_ms,
             "workerRole": cfg.worker_role,
             "executionProviders": list(state.execution_providers),
         }
@@ -117,7 +124,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         validate_analyze_request(payload, cfg)
         digest = request_hash(payload.model_dump())
         try:
-            job, cached = registry.begin(payload.idempotencyKey, digest)
+            job, cached = registry.begin(
+                payload.idempotencyKey,
+                digest,
+                redeliver=bool(
+                    payload.outputGrants and any(payload.outputGrants.model_dump().values())
+                ),
+            )
         except ValueError as exc:
             raise AnalyzeError(INVALID_REQUEST, str(exc)) from exc
         if cached is not None:

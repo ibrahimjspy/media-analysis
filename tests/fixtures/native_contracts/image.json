@@ -1,0 +1,167 @@
+{
+  "request": {
+    "idempotencyKey": "native",
+    "mediaKind": "image",
+    "features": [
+      "quality",
+      "exposure",
+      "saliency",
+      "focus"
+    ],
+    "source": {
+      "signedGetUrl": "https://media.example/source",
+      "expiresAt": "2099-01-01T00:00:00Z",
+      "sha256": "18bf654805cb8fbaa4cf70a626796289e57eed998e74c7f68907bf8ada292056"
+    }
+  },
+  "result": {
+    "schemaVersion": 2,
+    "overallStatus": "completed",
+    "requestedFeatures": [
+      "quality",
+      "exposure",
+      "saliency",
+      "focus"
+    ],
+    "capabilities": {
+      "quality": {
+        "status": "completed"
+      },
+      "exposure": {
+        "status": "completed"
+      },
+      "saliency": {
+        "status": "completed"
+      },
+      "focus": {
+        "status": "completed"
+      }
+    },
+    "provenance": {
+      "imageDecodeVersion": "image-srgb-exif-alpha-v1",
+      "imageMeasurementVersion": "image-measurements-v1",
+      "saliencyVersion": "lab-global-local-contrast-v1",
+      "focusVersion": "saliency-region-centroid-v1"
+    },
+    "warningCodes": [],
+    "mediaKind": "image",
+    "canonicalMedia": {
+      "sourceSha256": "18bf654805cb8fbaa4cf70a626796289e57eed998e74c7f68907bf8ada292056",
+      "sha256": "18bf654805cb8fbaa4cf70a626796289e57eed998e74c7f68907bf8ada292056",
+      "byteCount": 127,
+      "mimeType": "image/png",
+      "canonicalizationVersion": "image-srgb-exif-alpha-v1",
+      "kind": "image",
+      "width": 64,
+      "height": 32,
+      "aspectRatio": 2.0,
+      "sourceFormat": "PNG",
+      "sourceMimeType": "image/png",
+      "originalWidth": 64,
+      "originalHeight": 32,
+      "exifOrientation": 1,
+      "originalToCanonicalNormalized": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "colorSpace": "sRGB",
+      "colorPolicy": "ICC-to-sRGB; untagged-assumed-sRGB",
+      "alphaPolicy": "composite-white-in-sRGB",
+      "analysisWidth": 64,
+      "analysisHeight": 32,
+      "analysisToCanonicalScale": {
+        "x": 1.0,
+        "y": 1.0
+      },
+      "decoderOrientationPolicy": "EXIF-transpose",
+      "decoderReportedOrientation": null
+    },
+    "quality": {
+      "laplacianVariance": 4699.072265625,
+      "darkClipFraction": 0.853515625,
+      "brightClipFraction": 0.146484375,
+      "clipPolicy": "sRGB-gray-uint8<=5-or>=250",
+      "scoreType": "measurement",
+      "workingWidth": 64,
+      "workingHeight": 32,
+      "policyVersion": "image-measurements-v1"
+    },
+    "exposure": {
+      "meanLuma": 0.14648438964843752,
+      "lumaStdDev": 0.3535911875120776,
+      "lumaPercentiles": [
+        0.0,
+        0.0,
+        1.0000001
+      ],
+      "meanSrgb": [
+        0.146484375,
+        0.146484375,
+        0.146484375
+      ],
+      "lumaColorSpace": "linear-sRGB-BT709",
+      "policyVersion": "image-measurements-v1"
+    },
+    "saliency": {
+      "regions": [
+        {
+          "box": {
+            "x": 0.59375,
+            "y": 0.25,
+            "width": 0.40625,
+            "height": 0.59375
+          },
+          "point": {
+            "x": 0.7861501815464794,
+            "y": 0.5468759827175098
+          },
+          "score": 0.8898521065711975,
+          "contrastMass": 100295.234375
+        }
+      ],
+      "algorithmVersion": "lab-global-local-contrast-v1",
+      "model": null,
+      "scoreType": "heuristic",
+      "scoreMeaning": "region contrast / image peak contrast",
+      "validity": "contrast-evidence",
+      "productionQualified": false
+    },
+    "focus": {
+      "candidates": [
+        {
+          "point": {
+            "x": 0.7861501815464794,
+            "y": 0.5468759827175098
+          },
+          "box": {
+            "x": 0.59375,
+            "y": 0.25,
+            "width": 0.40625,
+            "height": 0.59375
+          },
+          "evidence": {
+            "feature": "saliency",
+            "regionIndex": 0
+          },
+          "selection": "inferred"
+        }
+      ],
+      "policyVersion": "saliency-region-centroid-v1",
+      "evidenceAlgorithmVersion": "lab-global-local-contrast-v1",
+      "validity": "contrast-evidence"
+    }
+  }
+}

@@ -151,3 +151,8 @@ real_models   downloads real ONNX weights (required on Linux CI; excluded from d
 ```
 
 `--strict-markers` is on. A typo in a marker fails the run.
+
+
+## Native media extension
+
+`tests/unit/test_native_media.py` and `tests/e2e/test_native_media_pipeline.py` exercise native decoding, normalized geometry, synthetic rhythm, codec timing, model outcomes, cache identity and renewed grants through real HTTP GET/PUT. Native stub visual models report unavailable. These tests do not certify real-model accuracy or caller preview/export. See [native media verification boundaries](NATIVE-MEDIA.md#verification-boundary).

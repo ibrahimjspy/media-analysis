@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from media_analysis.errors import DECODE_FAILED, TIMEOUT, AnalyzeError
+from media_analysis.errors import DECODE_FAILED, LIMIT_EXCEEDED, TIMEOUT, AnalyzeError
 from media_analysis.features.audio_subprocess import run_bounded_subprocess
 
 PCM_EXTRACTION_VERSION = "pcm-mono16k-1.0.0"
@@ -62,6 +62,7 @@ def extract_analysis_pcm(
     source_duration_sec: float | None = None,
     source_sample_rate: int | None = None,
     source_channel_count: int | None = None,
+    max_duration_sec: float | None = None,
     timeout_sec: float | None = None,
     cancel_check: Callable[[], None] | None = None,
 ) -> AnalysisPcm:
@@ -98,6 +99,8 @@ def extract_analysis_pcm(
         "pcm_f32le",
         "pipe:1",
     ]
+    if max_duration_sec is not None:
+        args[args.index("-vn") : args.index("-vn")] = ["-t", str(max_duration_sec + 0.1)]
     try:
         completed = run_bounded_subprocess(
             args,
@@ -139,6 +142,13 @@ def extract_analysis_pcm(
             source_channel_count=source_channel_count,
         )
 
+    if (
+        max_duration_sec is not None
+        and samples.size / ANALYSIS_SAMPLE_RATE > max_duration_sec + 0.01
+    ):
+        raise AnalyzeError(LIMIT_EXCEEDED, "Decoded audio exceeds duration limit")
+    if not np.isfinite(samples).all():
+        raise AnalyzeError(DECODE_FAILED, "Decoded audio contains non-finite samples")
     samples = np.clip(samples.astype(np.float32, copy=False), -1.0, 1.0)
     duration = pcm_duration_sec(int(samples.size), ANALYSIS_SAMPLE_RATE)
     return AnalysisPcm(

@@ -1,3 +1,7 @@
 # Keep OpenCV headless-only in production images.
 # scenedetect>=0.6.4,<0.7 does not require opencv-python (0.7+ bundles it).
 opencv-python-headless==4.10.0.84
+
+# Canonical still-image codec/color implementation used in contract fixtures.
+Pillow==12.3.0
+pillow-heif==1.7.0

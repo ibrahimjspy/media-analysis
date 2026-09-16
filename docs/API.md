@@ -7,13 +7,19 @@ private network.
 
 ## Authentication
 
-`GET /health`, `GET /ready`, and `GET /metrics` are unauthenticated for private
+`GET /health`, `GET /ready`, `GET /capabilities`, and `GET /metrics` are unauthenticated for private
 container probes and metrics scraping.
 Every analysis and cancellation request requires:
 
 ```http
 X-Media-Analysis-Key: <MEDIA_ANALYSIS_KEY>
 ```
+
+## Native image and audio branches
+
+See [Native media contract and caller handoff](NATIVE-MEDIA.md) for mediaKind,
+image/audio schema-v2 results, rhythm, canonical grants, format bounds and discovery.
+Omitted mediaKind retains the video contract documented below.
 
 ## Analyze
 
@@ -53,7 +59,8 @@ derived asset ID. If no canonical grant is supplied, canonicalization remains
 process-local for measurement compatibility.
 
 The same `idempotencyKey` and logical request return the cached result within a
-worker. Reusing the key with different logical content returns
+worker for metadata-only replay. Artifact-bearing retries fulfill the current grants
+using cached measurements or the documented artifact recomputation path. Reusing the key with different logical content returns
 `INVALID_REQUEST`. Signed URLs and expiration timestamps are excluded from the
 logical request hash.
 
@@ -61,7 +68,7 @@ logical request hash.
 
 - Frame ranges are half-open: `[startFrame, endFrameExclusive)`.
 - Boxes are normalized to `0..1` against canonical frame dimensions.
-- A missing feature field means it was not requested.
+- A missing feature field means unrequested or unavailable/failed; inspect capabilities.
 - `[]` or `null` means the feature ran and produced an empty or absent result.
 - Tracks are local to one analysis and reset at shot boundaries.
 - Subject tracks are not identities, and OCR returns regions rather than text.

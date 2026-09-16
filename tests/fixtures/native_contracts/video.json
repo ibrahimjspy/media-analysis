@@ -1,0 +1,73 @@
+{
+  "request": {
+    "idempotencyKey": "native",
+    "features": [
+      "shots"
+    ],
+    "source": {
+      "signedGetUrl": "https://media.example/source",
+      "expiresAt": "2099-01-01T00:00:00Z",
+      "sha256": "a99219bcc54a394123041e2bf34e27c316c0bc44343ca80fa6e817000ab49811"
+    }
+  },
+  "result": {
+    "schemaVersion": 1,
+    "overallStatus": "completed",
+    "requestedFeatures": [
+      "shots"
+    ],
+    "canonicalMedia": {
+      "fps": {
+        "numerator": 30,
+        "denominator": 1
+      },
+      "timeBase": {
+        "numerator": 1,
+        "denominator": 30
+      },
+      "frameCount": 30,
+      "durationSec": 1.0,
+      "width": 320,
+      "height": 240,
+      "mimeType": "video/mp4",
+      "codec": "h264",
+      "rotationApplied": true,
+      "sampleAspectRatio": "1:1",
+      "colorSpace": "bt709",
+      "videoRange": "limited",
+      "hasAudio": false,
+      "audioCodec": null,
+      "audioSampleRate": null,
+      "audioChannelCount": null,
+      "audioBitrateKbps": null
+    },
+    "capabilities": {
+      "shots": {
+        "status": "completed",
+        "version": "pyscenedetect-adaptive-1.0.0"
+      }
+    },
+    "shots": [
+      {
+        "startFrame": 0,
+        "endFrameExclusive": 30,
+        "startSecApprox": 0.0,
+        "endSecApprox": 1.0,
+        "boundaryKind": "end",
+        "boundaryScore": 1.0,
+        "boundaryScoreType": "heuristic",
+        "classification": "other",
+        "classificationScore": 0.0,
+        "scoreType": "heuristic"
+      }
+    ],
+    "provenance": {
+      "visualAnalyzerVersion": "1.2.0",
+      "decodePipelineVersion": "decode-cfr-1.1.0",
+      "samplingPolicyVersion": "max-gap-200ms-1.0.0",
+      "shotAnalyzerVersion": "pyscenedetect-adaptive-1.0.0",
+      "shotClassifierVersion": "heuristic-person-ratio-1.0.0"
+    },
+    "warningCodes": []
+  }
+}

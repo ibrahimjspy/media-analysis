@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CPU_FEATURES = frozenset(
@@ -19,12 +19,21 @@ CPU_FEATURES = frozenset(
         "exposure",
         "waveform",
         "thumbnails",
+        "focus",
+        "saliency",
+        "rhythm",
     }
 )
 MATTE_FEATURES = frozenset({"person_matte"})
 ALL_FEATURES = CPU_FEATURES | MATTE_FEATURES
 V1_FEATURES = frozenset({"subjects", "faces", "ocr", "shots"})
 IMPLEMENTED_CPU = CPU_FEATURES
+IMAGE_FEATURES = frozenset(
+    {"quality", "exposure", "subjects", "faces", "ocr", "thumbnails", "focus", "saliency"}
+)
+AUDIO_FEATURES = frozenset({"audio", "waveform", "rhythm"})
+VIDEO_FEATURES = ALL_FEATURES - {"focus", "saliency"}
+FEATURES_BY_KIND = {"image": IMAGE_FEATURES, "audio": AUDIO_FEATURES, "video": VIDEO_FEATURES}
 # 1920x1920 at 30 fps for the default 60s duration envelope.
 DEFAULT_MAX_DECODED_PIXELS = 1920 * 1920 * 1800
 
@@ -41,7 +50,13 @@ class Settings(BaseSettings):
     media_analysis_max_decoded_pixels: int = DEFAULT_MAX_DECODED_PIXELS
     media_analysis_model_dir: Path = Path("./models")
     media_analysis_image: str = "analysis-cpu"
-    media_analysis_worker_role: Literal["combined", "general", "ocr"] = "combined"
+    media_analysis_worker_role: Literal["combined", "general", "ocr", "audio"] = "combined"
+    media_analysis_enabled_features: list[str] | None = None
+    media_analysis_max_image_pixels: int = Field(default=40_000_000, gt=0)
+    media_analysis_image_max_dimension: int = Field(default=1280, ge=64, le=4096)
+    media_analysis_max_audio_duration_sec: float = Field(default=600, gt=0)
+    media_analysis_max_audio_channels: int = Field(default=8, ge=1, le=32)
+    media_analysis_max_audio_sample_rate: int = Field(default=192000, gt=0)
     media_analysis_allow_stub_models: bool = False
     media_analysis_download_timeout_sec: float = 30
     media_analysis_job_timeout_sec: float = 240
@@ -63,9 +78,14 @@ class Settings(BaseSettings):
     media_analysis_matte_keyframe_interval: int = Field(default=3, ge=1, le=30)
     media_analysis_matte_execution_provider: str = "auto"
     media_analysis_matte_inference_threads: int = Field(default=1, ge=1, le=8)
-    media_analysis_tensorrt_cache_dir: Path = Path(
-        "/var/tmp/media-analysis/tensorrt"
-    )
+    media_analysis_tensorrt_cache_dir: Path = Path("/var/tmp/media-analysis/tensorrt")
+
+    @field_validator("media_analysis_enabled_features")
+    @classmethod
+    def valid_configured_features(cls, features):
+        if features is not None and (not features or set(features) - ALL_FEATURES):
+            raise ValueError("enabled features must be a nonempty list of known features")
+        return features
 
     @property
     def allowed_hosts(self) -> frozenset[str]:

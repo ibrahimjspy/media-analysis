@@ -138,3 +138,8 @@ Pure math and state transitions use fast unit tests. HTTP, ffmpeg, cancellation,
 and signed source behavior use end-to-end tests through the real app. Production
 contracts verify Docker and manifest rules, while opt-in tests download and warm
 the real models. See [TESTING.md](TESTING.md).
+
+
+## Native media extension
+
+Native dispatch occurs after shared bounded source acquisition/SHA verification and before video probing. `native.py` orchestrates `image_decode.py`, `audio_decode.py` and native feature primitives. `native_schemas.py` validates image/audio results; the video path retains its schema. See [native media](NATIVE-MEDIA.md) for clocks, policies and cache/delivery separation.
