@@ -21,6 +21,9 @@ def _normalize_output_grants(grants: dict[str, Any] | None) -> dict[str, Any] | 
     stable: dict[str, Any] = {}
     if grants.get("canonicalMp4"):
         stable["canonicalMp4"] = True
+    for role in ("canonicalImage", "canonicalAudio"):
+        if grants.get(role):
+            stable[role] = True
     thumbnails = grants.get("thumbnails")
     if thumbnails:
         stable["thumbnails"] = sorted(
@@ -48,5 +51,10 @@ def request_hash(payload: dict[str, Any]) -> str:
         "priorFacts": payload.get("priorFacts"),
         "outputGrants": _normalize_output_grants(payload.get("outputGrants")),
     }
+    if payload.get("mediaKind", "video") != "video":
+        material["mediaKind"] = payload["mediaKind"]
+    for option in ("imageOptions", "rhythmOptions"):
+        if payload.get(option) is not None:
+            material[option] = payload[option]
     encoded = json.dumps(_normalize(material), separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

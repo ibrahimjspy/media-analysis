@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import resource
+import sys
 import threading
 import time
 from collections import defaultdict, deque
@@ -25,9 +27,7 @@ class StageLatencyMetrics:
         if max_samples_per_stage < 1:
             raise ValueError("max_samples_per_stage must be positive")
         self._max_samples = max_samples_per_stage
-        self._samples: dict[str, deque[int]] = defaultdict(
-            lambda: deque(maxlen=self._max_samples)
-        )
+        self._samples: dict[str, deque[int]] = defaultdict(lambda: deque(maxlen=self._max_samples))
         self._lock = threading.Lock()
 
     def observe(self, stage: str, duration_ms: int) -> None:
@@ -109,6 +109,8 @@ class JobTelemetry:
         for item in stages:
             stage_timings[item.name] = stage_timings.get(item.name, 0) + item.duration_ms
         return {
+            "processPeakRssBytes": int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            * (1 if sys.platform == "darwin" else 1024),
             "stageTimingsMs": stage_timings,
             "stageLatencyPercentiles": stage_latency_metrics.snapshot(),
             "bytesDownloaded": self.bytes_downloaded,

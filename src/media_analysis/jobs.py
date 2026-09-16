@@ -25,13 +25,15 @@ class JobRegistry:
         self._jobs: dict[str, Job] = {}
         self._max_jobs = max_jobs
 
-    def begin(self, idempotency_key: str, request_hash: str) -> tuple[Job, dict[str, Any] | None]:
+    def begin(
+        self, idempotency_key: str, request_hash: str, *, redeliver: bool = False
+    ) -> tuple[Job, dict[str, Any] | None]:
         with self._lock:
             existing = self._jobs.get(idempotency_key)
             if existing:
                 if existing.request_hash != request_hash:
                     raise ValueError("idempotency key is bound to a different request")
-                if existing.result is not None:
+                if existing.result is not None and not redeliver:
                     return existing, existing.result
                 if existing.active:
                     raise ValueError("job already active")

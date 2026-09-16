@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from media_analysis.config import ALL_FEATURES
+from media_analysis.config import ALL_FEATURES, FEATURES_BY_KIND
 from media_analysis.source import parse_expires_at
 
 _NORM_EPS = 1e-6
@@ -22,6 +22,9 @@ FeatureName = Literal[
     "waveform",
     "thumbnails",
     "person_matte",
+    "focus",
+    "saliency",
+    "rhythm",
 ]
 
 ScoreType = Literal["raw_model", "heuristic", "calibrated_probability"]
@@ -95,6 +98,8 @@ class MatteAssetOutputGrantIn(SignedPutGrantIn):
 
 class OutputGrantsIn(BaseModel):
     canonicalMp4: SignedPutGrantIn | None = None
+    canonicalImage: SignedPutGrantIn | None = None
+    canonicalAudio: SignedPutGrantIn | None = None
     thumbnails: list[ThumbnailOutputGrantIn] | None = None
     matteAssets: list[MatteAssetOutputGrantIn] | None = None
 
@@ -241,7 +246,28 @@ class PriorFactsIn(BaseModel):
         return self
 
 
+class ImageOptionsIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    maxDimension: int = Field(default=1280, ge=64, le=4096)
+    alphaBackground: Literal["white", "black"] = "white"
+
+
+class RhythmOptionsIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    minBpm: float = Field(default=50, ge=30, le=240)
+    maxBpm: float = Field(default=200, ge=40, le=300)
+
+    @model_validator(mode="after")
+    def ordered(self) -> RhythmOptionsIn:
+        if self.minBpm >= self.maxBpm:
+            raise ValueError("minBpm must be less than maxBpm")
+        return self
+
+
 class AnalyzeRequest(BaseModel):
+    mediaKind: Literal["video", "image", "audio"] = "video"
+    imageOptions: ImageOptionsIn | None = None
+    rhythmOptions: RhythmOptionsIn | None = None
     idempotencyKey: str = Field(min_length=1, max_length=256)
     canonicalMedia: CanonicalMediaIn | None = None
     source: SourceIn
@@ -252,6 +278,52 @@ class AnalyzeRequest(BaseModel):
     matteTarget: MatteTargetIn | None = None
     outputGrants: OutputGrantsIn | None = None
     priorFacts: PriorFactsIn | None = None
+
+    @model_validator(mode="after")
+    def kind_contract(self) -> AnalyzeRequest:
+        if set(self.features) - FEATURES_BY_KIND[self.mediaKind]:
+            raise ValueError("features are incompatible with mediaKind")
+        if self.mediaKind != "video":
+            if self.source.sha256 is None:
+                raise ValueError("image/audio requests require source.sha256")
+            if any(
+                value is not None
+                for value in (
+                    self.canonicalMedia,
+                    self.matteFrameRanges,
+                    self.matteTarget,
+                    self.priorFacts,
+                )
+            ):
+                raise ValueError("video metadata is invalid for image/audio")
+        if self.imageOptions is not None and self.mediaKind != "image":
+            raise ValueError("imageOptions requires image kind")
+        if self.rhythmOptions is not None and "rhythm" not in self.features:
+            raise ValueError("rhythmOptions requires rhythm")
+        if self.mediaKind == "audio" and self.analysisResolution is not None:
+            raise ValueError("audio has no image resolution")
+        grants = self.outputGrants
+        if grants:
+            for role, kind in (
+                ("canonicalMp4", "video"),
+                ("canonicalImage", "image"),
+                ("canonicalAudio", "audio"),
+            ):
+                if getattr(grants, role) is not None:
+                    if self.mediaKind != kind or (kind != "video" and not self.canonicalize):
+                        raise ValueError(f"{role} requires {kind} canonicalization")
+            if self.mediaKind != "video" and grants.matteAssets:
+                raise ValueError("matte grants require video")
+            if (
+                self.mediaKind != "video"
+                and grants.thumbnails
+                and "thumbnails" not in self.features
+            ):
+                raise ValueError("thumbnail grants require thumbnails")
+            if self.mediaKind == "image" and grants.thumbnails:
+                if [grant.index for grant in grants.thumbnails] != [0]:
+                    raise ValueError("image thumbnails require exactly index 0")
+        return self
 
     @field_validator("features")
     @classmethod

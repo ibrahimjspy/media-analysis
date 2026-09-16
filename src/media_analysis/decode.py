@@ -12,7 +12,7 @@ from media_analysis.errors import DECODE_FAILED, LIMIT_EXCEEDED, TIMEOUT, Analyz
 from media_analysis.frames import Rational, duration_sec
 
 DECODE_PIPELINE_VERSION = "decode-cfr-1.1.0"
-AUDIO_FEATURES = frozenset({"audio", "waveform"})
+AUDIO_FEATURES = frozenset({"audio", "waveform", "rhythm"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +76,17 @@ def probe(path: Path, *, timeout_sec: float | None = None) -> ProbedMedia:
     streams = payload.get("streams", [])
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    if payload.get("format", {}).get("format_name") in {
+        "image2",
+        "png_pipe",
+        "jpeg_pipe",
+        "webp_pipe",
+        "gif",
+    }:
+        raise AnalyzeError(DECODE_FAILED, "Still/animated images require an image request")
+    major_brand = payload.get("format", {}).get("tags", {}).get("major_brand", "").strip()
+    if major_brand in {"heic", "heix", "hevc", "hevx", "mif1", "msf1", "avif", "avis"}:
+        raise AnalyzeError(DECODE_FAILED, "HEIF/AVIF sources require an image request")
     if video is None:
         raise AnalyzeError(DECODE_FAILED, "Could not decode source")
     fps = _parse_rate(video.get("avg_frame_rate") or video.get("r_frame_rate") or "30/1")

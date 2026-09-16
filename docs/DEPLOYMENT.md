@@ -137,3 +137,8 @@ and byte size before opening the corresponding production gate.
 ## Licenses
 
 Third-party notices: [NOTICE](../NOTICE).
+
+
+## Native media extension
+
+Install updated runtime dependencies (Pillow and pillow-heif; Docker codec pins are in `docker/constraints.txt`). Native source limits are `MEDIA_ANALYSIS_MAX_IMAGE_PIXELS`, `MEDIA_ANALYSIS_IMAGE_MAX_DIMENSION`, `MEDIA_ANALYSIS_MAX_AUDIO_DURATION_SEC`, `MEDIA_ANALYSIS_MAX_AUDIO_CHANNELS` and `MEDIA_ANALYSIS_MAX_AUDIO_SAMPLE_RATE`. An `audio` worker role and optional JSON `MEDIA_ANALYSIS_ENABLED_FEATURES` restrict model initialization. See [native media](NATIVE-MEDIA.md) for exact support and open quality gates. Linux x86_64 remains the production verification target.

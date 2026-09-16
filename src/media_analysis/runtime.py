@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,7 @@ class RuntimeState:
     production_inference_ready: bool = False
     production_blockers: tuple[str, ...] = ()
     execution_providers: tuple[str, ...] = ()
+    initialization_ms: int = 0
 
 
 def _model_path(settings: Settings, manifest: ManifestState, name: str) -> Path:
@@ -98,7 +100,17 @@ def _silero_production_ready(
 
 
 def load_runtime(settings: Settings) -> RuntimeState:
+    started = time.perf_counter()
+    state = _load_runtime(settings)
+    return replace(state, initialization_ms=max(0, int((time.perf_counter() - started) * 1000)))
+
+
+def _load_runtime(settings: Settings) -> RuntimeState:
     """Verify artifacts, construct sessions, and run deterministic warmups."""
+    if settings.worker_role != "matte" and (
+        settings.worker_role == "audio" or settings.media_analysis_enabled_features is not None
+    ):
+        return _load_configured_runtime(settings)
     required_for_role: tuple[str, ...] | None = None
     if settings.worker_role == "general":
         required_for_role = tuple(
@@ -253,9 +265,7 @@ def load_runtime(settings: Settings) -> RuntimeState:
     vad_session = None
 
     try:
-        subject_detector = build_yolox_detector(
-            _model_path(settings, manifest, "yolox-tiny")
-        )
+        subject_detector = build_yolox_detector(_model_path(settings, manifest, "yolox-tiny"))
         subject_detector.detect(np.zeros((416, 416, 3), dtype=np.uint8))
         loaded.append("yolox-tiny")
     except Exception as exc:
@@ -270,9 +280,7 @@ def load_runtime(settings: Settings) -> RuntimeState:
 
     if settings.worker_role != "general":
         try:
-            ocr_session = create_det_session(
-                _model_path(settings, manifest, "PP-OCRv5_mobile_det")
-            )
+            ocr_session = create_det_session(_model_path(settings, manifest, "PP-OCRv5_mobile_det"))
             run_det_inference(
                 ocr_session,
                 np.zeros((320, 320, 3), dtype=np.uint8),
@@ -301,9 +309,8 @@ def load_runtime(settings: Settings) -> RuntimeState:
             "silero-vad production gate is closed or its artifact is not production-ready"
         )
     ready = not errors and required_models.issubset(set(loaded))
-    owned_ocr_ready = (
-        settings.worker_role == "general"
-        or (gates is not None and gates.owned_ppocr_export_recorded)
+    owned_ocr_ready = settings.worker_role == "general" or (
+        gates is not None and gates.owned_ppocr_export_recorded
     )
     production_blockers: list[str] = []
     if not silero_ready:
@@ -324,4 +331,68 @@ def load_runtime(settings: Settings) -> RuntimeState:
         errors=tuple(errors),
         production_inference_ready=ready and silero_ready and owned_ocr_ready,
         production_blockers=tuple(production_blockers),
+    )
+
+
+def _load_configured_runtime(settings: Settings) -> RuntimeState:
+    """Initialize just the models required by the explicitly configured feature set."""
+    from media_analysis.capabilities import FEATURE_MODELS, configured_features
+
+    required = {FEATURE_MODELS[f] for f in configured_features(settings) if f in FEATURE_MODELS}
+    manifest = verify_models(
+        settings.media_analysis_model_dir,
+        image=settings.media_analysis_image,
+        required_models=tuple(sorted(required)),
+    )
+    if not manifest.ready:
+        return RuntimeState(manifest, False, (), False, errors=manifest.errors)
+    sessions = {}
+    loaded, errors, blockers = [], [], []
+    gates = _profile_gates(settings)
+    reference = False
+    for name in sorted(required):
+        entry = manifest.by_name(name)
+        if entry.stub:
+            if not settings.media_analysis_allow_stub_models:
+                errors.append(f"stub artifact forbidden: {name}")
+            else:
+                reference = True
+                loaded.append(name)
+                blockers.append(f"stub artifact: {name}")
+            continue
+        try:
+            path = _model_path(settings, manifest, name)
+            if name == "yolox-tiny":
+                session = build_yolox_detector(path)
+                session.detect(np.zeros((416, 416, 3), dtype=np.uint8))
+                sessions["subject_detector"] = session
+            elif name == "yunet":
+                session = load_yunet_detector(path)
+                session.detect(np.zeros((320, 320, 3), dtype=np.uint8))
+                sessions["face_detector"] = session
+            elif name == "PP-OCRv5_mobile_det":
+                session = create_det_session(path)
+                run_det_inference(session, np.zeros((320, 320, 3), dtype=np.uint8))
+                sessions["ocr_session"] = session
+                if gates is None or not gates.owned_ppocr_export_recorded:
+                    blockers.append("owned PP-OCR export parity gate is closed")
+            elif name == SILERO_VAD_MODEL_NAME:
+                session = load_silero_vad_session(path)
+                warmup_silero_vad(session)
+                sessions["vad_session"] = session
+                if not _silero_production_ready(entry, gates=gates, settings=settings):
+                    blockers.append("silero-vad production gate is closed")
+            loaded.append(name)
+        except Exception as exc:
+            errors.append(f"{name} load/warmup failed: {type(exc).__name__}")
+    return RuntimeState(
+        manifest,
+        not errors,
+        tuple(loaded),
+        not errors,
+        **sessions,
+        errors=tuple(errors),
+        reference_mode=reference,
+        production_inference_ready=not errors and not blockers,
+        production_blockers=tuple(blockers),
     )

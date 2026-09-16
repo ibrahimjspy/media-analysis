@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import time
 from collections.abc import Iterator
@@ -22,6 +23,7 @@ from media_analysis.decode import (
 )
 from media_analysis.errors import (
     CANCELLED,
+    CHECKSUM_MISMATCH,
     FEATURE_UNAVAILABLE,
     INVALID_REQUEST,
     LIMIT_EXCEEDED,
@@ -111,7 +113,7 @@ SHOT_TIMELINE_FEATURES = frozenset(
     {"shots", "subjects", "faces", "ocr", "quality", "exposure", "thumbnails"}
 )
 VISUAL_SHARED = frozenset({"motion", "quality", "exposure", "thumbnails"})
-AUDIO_FEATURES = frozenset({"audio", "waveform"})
+AUDIO_FEATURES = frozenset({"audio", "waveform", "rhythm"})
 FILL_ONLY_VISUAL = frozenset({"exposure", "thumbnails"})
 
 
@@ -196,6 +198,11 @@ def _remaining(deadline: float) -> float:
 
 
 def validate_features(features: list[str], settings: Settings) -> None:
+    from media_analysis.capabilities import configured_features
+
+    if settings.worker_role == "audio" or settings.media_analysis_enabled_features is not None:
+        if set(features) - configured_features(settings):
+            raise AnalyzeError(FEATURE_UNAVAILABLE, "Feature is not configured on this worker")
     if settings.media_analysis_image == "analysis-cpu" and set(features) & MATTE_FEATURES:
         raise AnalyzeError(INVALID_REQUEST, "person_matte is not served by analysis-cpu")
     if settings.media_analysis_image.startswith("matte"):
@@ -272,9 +279,7 @@ def validate_analyze_request(request: AnalyzeRequest, settings: Settings) -> Non
 def _prior_shot_dicts(request: AnalyzeRequest) -> list[dict[str, Any]] | None:
     if request.priorFacts is None or not request.priorFacts.shots:
         return None
-    return [
-        shot.model_dump(mode="python", by_alias=True) for shot in request.priorFacts.shots
-    ]
+    return [shot.model_dump(mode="python", by_alias=True) for shot in request.priorFacts.shots]
 
 
 def _subject_boxes_by_frame(
@@ -322,8 +327,7 @@ def _thumbnail_grants(request: AnalyzeRequest) -> list[dict[str, Any]] | None:
     if request.outputGrants is None or not request.outputGrants.thumbnails:
         return None
     return [
-        grant.model_dump(mode="python", by_alias=True)
-        for grant in request.outputGrants.thumbnails
+        grant.model_dump(mode="python", by_alias=True) for grant in request.outputGrants.thumbnails
     ]
 
 
@@ -355,7 +359,11 @@ def run_analyze(
     if not runtime.ready:
         raise AnalyzeError(MODEL_NOT_READY, "Required models are not loaded")
     validate_analyze_request(request, settings)
-    if "audio" in request.features and settings.media_analysis_image == "analysis-cpu":
+    if (
+        request.mediaKind == "video"
+        and "audio" in request.features
+        and settings.media_analysis_image == "analysis-cpu"
+    ):
         if not _audio_vad_available(runtime, runtime.manifest, settings):
             raise AnalyzeError(
                 FEATURE_UNAVAILABLE,
@@ -389,6 +397,10 @@ def run_analyze(
                 assert_fetch_url(request.source.signedGetUrl, settings)
                 if cached_source.byte_count > settings.media_analysis_max_bytes:
                     raise AnalyzeError(LIMIT_EXCEEDED, "Source exceeds MEDIA_ANALYSIS_MAX_BYTES")
+                from media_analysis.models_manifest import sha256_file
+
+                if sha256_file(cached_source.path) != declared_fingerprint:
+                    raise AnalyzeError(CHECKSUM_MISMATCH, "Cached source sha256 did not match")
                 src = cached_source.path
                 fingerprint = declared_fingerprint
                 telemetry.source_cache_hit = True
@@ -414,6 +426,21 @@ def run_analyze(
                         src,
                         suffix=".media",
                     )
+        if request.mediaKind != "video":
+            from media_analysis.native import run_native
+
+            return run_native(
+                request,
+                src,
+                fingerprint,
+                settings=settings,
+                runtime=runtime,
+                job=job,
+                deadline=deadline,
+                telemetry=telemetry,
+                media_cache=media_cache,
+                work_dir=Path(tmp),
+            )
         work = src
         preserve_audio = needs_canonical_audio(
             canonicalize=request.canonicalize,
@@ -477,12 +504,12 @@ def run_analyze(
                     "analysisResolution must preserve canonical aspect ratio",
                 )
         result_key = _result_cache_key(request, runtime, settings, fingerprint)
-        cacheable_result = media_cache.enabled and declared_fingerprint is not None and not (
-            set(request.features) & {"thumbnails", "person_matte"}
+        cacheable_result = (
+            media_cache.enabled
+            and declared_fingerprint is not None
+            and not (set(request.features) & {"thumbnails", "person_matte"})
         )
-        cached_result = (
-            media_cache.get_json("result", result_key) if cacheable_result else None
-        )
+        cached_result = media_cache.get_json("result", result_key) if cacheable_result else None
         if cached_result is not None and cached_result.get("overallStatus") != "completed":
             cached_result = None
         if cached_result is not None:
@@ -537,6 +564,22 @@ def _result_cache_key(
     settings: Settings,
     media_fingerprint: str,
 ) -> str:
+    from media_analysis.audio_decode import AUDIO_DECODE_VERSION
+    from media_analysis.features.audio import AUDIO_ANALYZER_VERSION, VAD_POLICY_VERSION
+    from media_analysis.features.audio_dsp import (
+        BPM_POLICY_VERSION,
+        LOUDNESS_POLICY_VERSION,
+        ONSET_POLICY_VERSION,
+        RMS_POLICY_VERSION,
+    )
+    from media_analysis.features.image import (
+        FOCUS_VERSION,
+        IMAGE_MEASUREMENT_VERSION,
+        SALIENCY_VERSION,
+    )
+    from media_analysis.features.rhythm import RHYTHM_VERSION
+    from media_analysis.image_decode import IMAGE_DECODE_VERSION
+
     model_identity = ",".join(
         f"{entry.name}:{entry.sha256}"
         for entry in sorted(runtime.manifest.entries, key=lambda item: item.name)
@@ -545,9 +588,39 @@ def _result_cache_key(
         media_fingerprint,
         request_hash(request.model_dump(mode="python", by_alias=True)),
         __version__,
-        "analysis-cache-v2",
+        "analysis-cache-v3",
+        AUDIO_DECODE_VERSION,
+        AUDIO_ANALYZER_VERSION,
+        VAD_POLICY_VERSION,
+        BPM_POLICY_VERSION,
+        LOUDNESS_POLICY_VERSION,
+        ONSET_POLICY_VERSION,
+        RMS_POLICY_VERSION,
+        PCM_EXTRACTION_VERSION,
+        WAVEFORM_ANALYZER_VERSION,
+        IMAGE_DECODE_VERSION,
+        IMAGE_MEASUREMENT_VERSION,
+        SALIENCY_VERSION,
+        FOCUS_VERSION,
+        RHYTHM_VERSION,
+        f"image-max-dimension:{settings.media_analysis_image_max_dimension}",
+        f"runtime:{runtime.reference_mode}:{runtime.loaded_models}",
         DECODE_PIPELINE_VERSION,
         OCR_SAMPLER_VERSION,
+        OCR_DETECTOR_VERSION,
+        OCR_MERGE_VERSION,
+        preprocessing_version(),
+        SHOT_ANALYZER_VERSION,
+        SHOT_CLASSIFIER_VERSION,
+        TRACKER_VERSION,
+        SAMPLING_POLICY_VERSION,
+        FACE_TRACKER_VERSION,
+        FACE_ASSOCIATION_VERSION,
+        YUNET_CAPABILITY_VERSION,
+        YUNET_PREPROCESSING_VERSION,
+        THUMBNAIL_ANALYZER_VERSION,
+        MATTE_TEMPORAL_POLICY_VERSION,
+        json.dumps(analyze_build_provenance(), sort_keys=True),
         MOTION_ANALYZER_VERSION,
         QUALITY_POLICY_VERSION,
         EXPOSURE_ANALYZER_VERSION,
@@ -632,6 +705,7 @@ def _run_ocr_feature(
 
 def _run_audio_features(
     *,
+    rhythm_options=None,
     requested_set: set[str],
     path: Path,
     media: Any,
@@ -695,6 +769,19 @@ def _run_audio_features(
                 raise
             except Exception:
                 capabilities["waveform"] = waveform_capability(status="failed")
+    if "rhythm" in requested_set:
+        from media_analysis.features.rhythm import RHYTHM_VERSION, analyze_rhythm
+
+        with _feature_stage("rhythm", telemetry, job, deadline, stage_budget) as stage_check:
+            body["rhythm"] = analyze_rhythm(
+                shared_pcm,
+                cancel_check=stage_check,
+                min_bpm=rhythm_options.minBpm if rhythm_options else 50,
+                max_bpm=rhythm_options.maxBpm if rhythm_options else 200,
+            )
+            capabilities["rhythm"] = {"status": "completed", "version": RHYTHM_VERSION}
+            if not shared_pcm.has_audio:
+                warnings.append("AUDIO_ABSENT")
     return body, capabilities, warnings
 
 
@@ -769,8 +856,16 @@ def _compute_cpu(
     with ExitStack() as resources:
         try:
             return _compute_cpu_inner(
-                request, media, path, runtime, settings, job, deadline,
-                telemetry=telemetry, frame_access=frame_access, resources=resources,
+                request,
+                media,
+                path,
+                runtime,
+                settings,
+                job,
+                deadline,
+                telemetry=telemetry,
+                frame_access=frame_access,
+                resources=resources,
             )
         except BaseException:
             job.cancel.set()
@@ -879,6 +974,7 @@ def _compute_cpu_inner(
             (
                 "audio",
                 lambda: _run_audio_features(
+                    rhythm_options=request.rhythmOptions,
                     requested_set=requested_set,
                     path=path,
                     media=media,
@@ -892,18 +988,18 @@ def _compute_cpu_inner(
         )
     background_slots = max(0, settings.media_analysis_feature_workers - 1)
     feature_pool = (
-        resources.enter_context(ThreadPoolExecutor(
-            max_workers=min(background_slots, len(feature_calls)),
-            thread_name_prefix="media-feature",
-        ))
+        resources.enter_context(
+            ThreadPoolExecutor(
+                max_workers=min(background_slots, len(feature_calls)),
+                thread_name_prefix="media-feature",
+            )
+        )
         if background_slots and feature_calls
         else None
     )
     background_features: list[tuple[str, Future[FeatureOutcome]]] = []
     if feature_pool is not None:
-        background_features = [
-            (name, feature_pool.submit(call)) for name, call in feature_calls
-        ]
+        background_features = [(name, feature_pool.submit(call)) for name, call in feature_calls]
 
     if "subjects" in requested_set:
         with _feature_stage("subjects", telemetry, job, deadline, stage_budget) as stage_check:
@@ -957,8 +1053,7 @@ def _compute_cpu_inner(
                         and request.priorFacts.subjects is not None
                     ):
                         face_subjects = [
-                            item.model_dump(by_alias=True)
-                            for item in request.priorFacts.subjects
+                            item.model_dump(by_alias=True) for item in request.priorFacts.subjects
                         ]
                     faces = analyze_faces(
                         path,
@@ -966,9 +1061,7 @@ def _compute_cpu_inner(
                         shots=internal_shots,
                         subjects=face_subjects,
                         analysis_width=(
-                            request.analysisResolution.width
-                            if request.analysisResolution
-                            else None
+                            request.analysisResolution.width if request.analysisResolution else None
                         ),
                         analysis_height=(
                             request.analysisResolution.height
@@ -1006,8 +1099,7 @@ def _compute_cpu_inner(
     subject_tracks = body.get("subjects")
     if subject_tracks is None and request.priorFacts and request.priorFacts.subjects:
         subject_tracks = [
-            track.model_dump(mode="python", by_alias=True)
-            for track in request.priorFacts.subjects
+            track.model_dump(mode="python", by_alias=True) for track in request.priorFacts.subjects
         ]
     subject_boxes = _subject_boxes_by_frame(subject_tracks)
 
@@ -1121,6 +1213,7 @@ def _compute_cpu_inner(
                     "thumbnails", telemetry, job, deadline, stage_budget
                 ) as stage_check:
                     try:
+
                         def upload_thumbnail(grant: ThumbnailGrant, payload: bytes) -> None:
                             with _feature_stage(
                                 "upload_thumbnail",
@@ -1258,9 +1351,7 @@ def _compute_cpu_inner(
         provenance["shotClassifierVersion"] = SHOT_CLASSIFIER_VERSION
     if "motion" in requested_set:
         provenance["motionAnalyzerVersion"] = MOTION_ANALYZER_VERSION
-        provenance["motionWorkingMaxDimension"] = (
-            settings.media_analysis_motion_max_dimension
-        )
+        provenance["motionWorkingMaxDimension"] = settings.media_analysis_motion_max_dimension
     if "quality" in requested_set:
         provenance["qualityPolicyVersion"] = QUALITY_POLICY_VERSION
     if AUDIO_FEATURES & requested_set:
@@ -1275,6 +1366,10 @@ def _compute_cpu_inner(
                 else "onnxruntime-cpu",
             )
         )
+    if "rhythm" in requested_set:
+        from media_analysis.features.rhythm import RHYTHM_VERSION
+
+        provenance["rhythmVersion"] = RHYTHM_VERSION
     if "waveform" in requested_set:
         provenance["waveformAnalyzerVersion"] = WAVEFORM_ANALYZER_VERSION
     if "exposure" in requested_set:
@@ -1361,9 +1456,7 @@ def _compute_matte(
         )
 
     try:
-        with _feature_stage(
-            "person_matte", telemetry, job, deadline, stage_budget
-        ) as stage_check:
+        with _feature_stage("person_matte", telemetry, job, deadline, stage_budget) as stage_check:
             with BoundedFrameAccess(
                 path,
                 config=FrameAccessConfig(
@@ -1420,7 +1513,8 @@ def _compute_matte(
         }
         if runtime.reference_mode:
             warnings.append(
-                "MATTE_REFERENCE_MODE" if modnet_entry is None or modnet_entry.stub
+                "MATTE_REFERENCE_MODE"
+                if modnet_entry is None or modnet_entry.stub
                 else "MATTE_EVALUATION_MODE"
             )
     except AnalyzeError:

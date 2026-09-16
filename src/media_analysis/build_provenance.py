@@ -56,12 +56,16 @@ def collect_runtime_build() -> dict[str, str]:
     import cv2
     import numpy
     import onnxruntime
+    import PIL
+    import pillow_heif
 
     return {
         "pythonVersion": platform.python_version(),
         "onnxruntimeVersion": onnxruntime.__version__,
         "opencvVersion": cv2.__version__,
         "numpyVersion": numpy.__version__,
+        "pillowVersion": PIL.__version__,
+        "pillowHeifVersion": pillow_heif.__version__,
     }
 
 

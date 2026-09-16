@@ -289,3 +289,10 @@ Created and maintained by [Muhammad Ibrahim (@ibrahimjspy)](https://github.com/i
 ## Trademark
 
 Apache, OpenCV, FFmpeg, and other names belong to their owners. Use of those names here is identification only.
+
+## Native media
+
+The internal `/analyze` API now accepts native images and standalone audio through
+`mediaKind`, alongside the existing video contract. See the [contract and caller
+handoff](docs/NATIVE-MEDIA.md) for feature support, format policies, rhythm evidence,
+artifact delivery and verification boundaries. `/capabilities` reports configured support.
