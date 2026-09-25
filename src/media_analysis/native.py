@@ -141,6 +141,14 @@ def run_native(
                             bodies[feature] = {
                                 "regions": image_features.regions(feature, bgr, runtime)
                             }
+                        elif feature == "visual_regions":
+                            from media_analysis.features.visual_regions import available, detect
+
+                            if not available(settings.media_analysis_visual_enabled):
+                                capabilities[feature] = {"status": "unavailable"}
+                                warnings.append("VISUAL_REGIONS_UNAVAILABLE")
+                                continue
+                            bodies[feature] = detect(bgr, guard)
                         elif feature in {"quality", "exposure"}:
                             bodies[feature] = getattr(image_features, feature)(bgr)
                         elif feature in {"saliency", "focus"}:

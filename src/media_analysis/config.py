@@ -21,6 +21,7 @@ CPU_FEATURES = frozenset(
         "thumbnails",
         "focus",
         "saliency",
+        "visual_regions",
         "rhythm",
     }
 )
@@ -29,10 +30,20 @@ ALL_FEATURES = CPU_FEATURES | MATTE_FEATURES
 V1_FEATURES = frozenset({"subjects", "faces", "ocr", "shots"})
 IMPLEMENTED_CPU = CPU_FEATURES
 IMAGE_FEATURES = frozenset(
-    {"quality", "exposure", "subjects", "faces", "ocr", "thumbnails", "focus", "saliency"}
+    {
+        "quality",
+        "exposure",
+        "subjects",
+        "faces",
+        "ocr",
+        "thumbnails",
+        "focus",
+        "saliency",
+        "visual_regions",
+    }
 )
 AUDIO_FEATURES = frozenset({"audio", "waveform", "rhythm"})
-VIDEO_FEATURES = ALL_FEATURES - {"focus", "saliency"}
+VIDEO_FEATURES = ALL_FEATURES - {"focus", "saliency", "visual_regions"}
 FEATURES_BY_KIND = {"image": IMAGE_FEATURES, "audio": AUDIO_FEATURES, "video": VIDEO_FEATURES}
 # 1920x1920 at 30 fps for the default 60s duration envelope.
 DEFAULT_MAX_DECODED_PIXELS = 1920 * 1920 * 1800
@@ -51,6 +62,7 @@ class Settings(BaseSettings):
     media_analysis_model_dir: Path = Path("./models")
     media_analysis_image: str = "analysis-cpu"
     media_analysis_worker_role: Literal["combined", "general", "ocr", "audio"] = "combined"
+    media_analysis_visual_enabled: bool = False
     media_analysis_enabled_features: list[str] | None = None
     media_analysis_max_image_pixels: int = Field(default=40_000_000, gt=0)
     media_analysis_image_max_dimension: int = Field(default=1280, ge=64, le=4096)

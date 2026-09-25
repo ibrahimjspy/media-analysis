@@ -23,6 +23,7 @@ FeatureName = Literal[
     "thumbnails",
     "person_matte",
     "focus",
+    "visual_regions",
     "saliency",
     "rhythm",
 ]

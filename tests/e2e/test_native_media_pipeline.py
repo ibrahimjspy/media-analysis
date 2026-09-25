@@ -510,3 +510,57 @@ def test_heif_cannot_enter_video_path(settings, auth_headers):
         )
         assert response.status_code == 422, response.text
         assert response.json()["code"] == "DECODE_FAILED"
+
+
+def test_visual_regions_native_boundary(settings, auth_headers, tmp_path, monkeypatch):
+    """New optional evidence survives HTTP serialization with canonical geometry."""
+    from media_analysis.features import visual_regions
+
+    cfg = settings.model_copy(update={"media_analysis_cache_dir": tmp_path / "visual-cache"})
+    data = png_bytes()
+    monkeypatch.setattr(visual_regions, "available", lambda enabled: True)
+    monkeypatch.setattr(
+        visual_regions,
+        "detect",
+        lambda frame, guard: {
+            "policyVersion": "home-tour-visual-1",
+            "modelRevision": "test",
+            "regions": [
+                {
+                    "id": "region-0",
+                    "label": "sofa",
+                    "score": 0.7,
+                    "box": {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4},
+                }
+            ],
+        },
+    )
+    with media_server(data) as (url, uploads), TestClient(create_app(cfg)) as client:
+        request = payload(url, data, "image", ["quality", "visual_regions"])
+        response = client.post("/analyze", json=request, headers=auth_headers)
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["capabilities"]["visual_regions"]["status"] == "completed"
+        assert result["visual_regions"]["regions"][0]["box"]["x"] == 0.1
+
+
+def test_visual_regions_unavailable_is_not_empty_success(
+    settings, auth_headers, tmp_path, monkeypatch
+):
+    """A missing optional detector preserves quality and reports unavailable."""
+    from media_analysis.features import visual_regions
+
+    cfg = settings.model_copy(update={"media_analysis_cache_dir": tmp_path / "visual-off"})
+    monkeypatch.setattr(visual_regions, "available", lambda enabled: False)
+    data = png_bytes()
+    with media_server(data) as (url, uploads), TestClient(create_app(cfg)) as client:
+        response = client.post(
+            "/analyze",
+            json=payload(url, data, "image", ["quality", "visual_regions"]),
+            headers=auth_headers,
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["overallStatus"] == "partial"
+        assert result["capabilities"]["visual_regions"]["status"] == "unavailable"
+        assert result.get("visual_regions") is None
