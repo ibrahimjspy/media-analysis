@@ -42,7 +42,7 @@ dependencies = [
 media-analysis-vendor-models = "media_analysis.tools.vendor_models:main"
 
 [project.optional-dependencies]
-visual = ["torch==2.7.0", "transformers==4.51.3"]
+visual = ["torch==2.7.0", "transformers==5.10.1"]
 dev = [
   "pytest>=8.3,<9",
   "pytest-cov>=6.0,<7",
