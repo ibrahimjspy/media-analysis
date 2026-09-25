@@ -50,6 +50,10 @@ def capability_document(settings, runtime):
                     "ocr": "ocr_session",
                 }.get(feature)
                 model_ready = attribute is not None and getattr(runtime, attribute) is not None
+            if feature == "visual_regions":
+                from media_analysis.features.visual_regions import available
+
+                model_ready = available(settings.media_analysis_visual_enabled)
             kinds[kind]["features"][feature] = {
                 "implemented": True,
                 "configured": feature in configured,
@@ -94,6 +98,7 @@ def capability_document(settings, runtime):
             "audioDecode": AUDIO_DECODE_VERSION,
             "saliency": SALIENCY_VERSION,
             "focus": FOCUS_VERSION,
+            "visualRegions": "home-tour-visual-1:12bdfa3120f3e7ec7b434d90674b3396eccf88eb",
             "rhythm": RHYTHM_VERSION,
         },
         "matte": {

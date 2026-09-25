@@ -589,6 +589,14 @@ def _result_cache_key(
         request_hash(request.model_dump(mode="python", by_alias=True)),
         __version__,
         "analysis-cache-v3",
+        *(
+            [
+                "home-tour-visual-1:12bdfa3120f3e7ec7b434d90674b3396eccf88eb",
+                str(settings.media_analysis_visual_enabled),
+            ]
+            if "visual_regions" in request.features
+            else []
+        ),
         AUDIO_DECODE_VERSION,
         AUDIO_ANALYZER_VERSION,
         VAD_POLICY_VERSION,

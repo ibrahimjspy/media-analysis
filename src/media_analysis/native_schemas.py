@@ -240,6 +240,7 @@ class ImageResult(NativeEnvelope):
     ocr: ImageRegions | None = None
     saliency: Saliency | None = None
     focus: Focus | None = None
+    visual_regions: dict[str, Any] | None = None
     thumbnails: list[ImageThumbnail] | None = None
 
 
