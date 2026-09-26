@@ -180,7 +180,38 @@ class RhythmSegment(MeasurementModel):
     bpm: float = Field(gt=0)
 
 
+class NeuralBeatEvent(MeasurementModel):
+    """Model time and rounded coordinate; no confidence or strength is implied."""
+
+    timeSec: float = Field(ge=0, allow_inf_nan=False)
+    sampleIndex: int = Field(ge=0)
+
+
+class NeuralBeatDiagnostics(MeasurementModel):
+    """Downbeats are diagnostic only and cannot be selected as anchors."""
+
+    downbeatTimesSec: list[float]
+    downbeatsQualified: Literal[False] = False
+
+
+class NeuralRhythm(MeasurementModel):
+    """Separate opt-in evidence; failed inference is never successful silence."""
+
+    status: Literal["completed", "unavailable", "failed", "cancelled"]
+    algorithmVersion: Literal["beat-this-small0-v1"]
+    checkpointSha256: Literal["6074be2c4d490c5f6101fcc374a1ec72ae93456e23bb6019783b849f5dc7d47b"]
+    sampleRate: Literal[22050]
+    frameHopSec: Literal[0.02]
+    timestampOrigin: Literal["decoded-playback-start"]
+    evidenceKind: Literal["model-estimate"]
+    beats: list[NeuralBeatEvent]
+    warningCodes: list[str]
+    productionQualified: Literal[False]
+    diagnostics: NeuralBeatDiagnostics | None = None
+
+
 class Rhythm(MeasurementModel):
+    neural: NeuralRhythm | None = None
     beats: list[AcousticEvent]
     onsetCandidates: list[AcousticEvent]
     bpm: float | None

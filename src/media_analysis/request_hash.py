@@ -55,6 +55,9 @@ def request_hash(payload: dict[str, Any]) -> str:
         material["mediaKind"] = payload["mediaKind"]
     for option in ("imageOptions", "rhythmOptions"):
         if payload.get(option) is not None:
-            material[option] = payload[option]
+            value = dict(payload[option])
+            if option == "rhythmOptions" and not value.get("neuralBeats"):
+                value.pop("neuralBeats", None)  # Preserve old default-false hashes.
+            material[option] = value
     encoded = json.dumps(_normalize(material), separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

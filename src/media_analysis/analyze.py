@@ -591,6 +591,16 @@ def _result_cache_key(
         "analysis-cache-v3",
         *(
             [
+                "beat-this-small0-v1:6074be2c4d490c5f6101fcc374a1ec72ae93456e23bb6019783b849f5dc7d47b:mono22050-f32-playback-v1:dbn-false",
+                str(settings.media_analysis_neural_beats_enabled),
+                str(settings.media_analysis_neural_beats_max_duration_sec),
+                str(runtime.neural_beats is not None),
+            ]
+            if request.rhythmOptions and request.rhythmOptions.neuralBeats
+            else []
+        ),
+        *(
+            [
                 "home-tour-visual-1:12bdfa3120f3e7ec7b434d90674b3396eccf88eb",
                 str(settings.media_analysis_visual_enabled),
             ]

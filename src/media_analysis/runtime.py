@@ -50,6 +50,8 @@ class RuntimeState:
     production_blockers: tuple[str, ...] = ()
     execution_providers: tuple[str, ...] = ()
     initialization_ms: int = 0
+    neural_beats: Any | None = None
+    neural_beats_error: str | None = None
 
 
 def _model_path(settings: Settings, manifest: ManifestState, name: str) -> Path:
@@ -102,6 +104,21 @@ def _silero_production_ready(
 def load_runtime(settings: Settings) -> RuntimeState:
     started = time.perf_counter()
     state = _load_runtime(settings)
+    if settings.media_analysis_neural_beats_enabled and settings.worker_role in {
+        "audio",
+        "combined",
+        "general",
+    }:
+        try:
+            from media_analysis.features.beat_this import BeatThisAnalyzer
+
+            predictor = BeatThisAnalyzer.load(
+                settings.media_analysis_model_dir / "beat-this-small0.ckpt",
+                settings.media_analysis_neural_beats_max_duration_sec,
+            )
+            state = replace(state, neural_beats=predictor)
+        except Exception:
+            state = replace(state, neural_beats_error="NEURAL_BEATS_UNAVAILABLE")
     return replace(state, initialization_ms=max(0, int((time.perf_counter() - started) * 1000)))
 
 
