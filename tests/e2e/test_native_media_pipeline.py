@@ -564,3 +564,66 @@ def test_visual_regions_unavailable_is_not_empty_success(
         assert result["overallStatus"] == "partial"
         assert result["capabilities"]["visual_regions"]["status"] == "unavailable"
         assert result.get("visual_regions") is None
+
+
+def test_neural_failure_retains_legacy_rhythm(settings, auth_headers, tmp_path, monkeypatch):
+    """Optional inference failure is partial evidence, never erased legacy data."""
+    from dataclasses import replace
+
+    import media_analysis.app as app_module
+
+    original = app_module.load_runtime
+
+    class BrokenPredictor:
+        def analyze(self, *args):
+            raise ValueError("test model failure")
+
+    monkeypatch.setattr(
+        app_module,
+        "load_runtime",
+        lambda cfg: replace(original(cfg), neural_beats=BrokenPredictor()),
+    )
+    cfg = settings.model_copy(update={"media_analysis_cache_dir": tmp_path / "neural-fail"})
+    data = wav_bytes()
+    with media_server(data) as (url, uploads), TestClient(create_app(cfg)) as client:
+        request = payload(url, data, "audio", ["rhythm"], rhythmOptions={"neuralBeats": True})
+        result = client.post("/analyze", json=request, headers=auth_headers)
+        assert result.status_code == 200, result.text
+        body = result.json()
+        assert body["capabilities"]["rhythm"]["status"] == "partial"
+        assert body["rhythm"]["neural"]["status"] == "failed"
+        assert body["rhythm"]["sampleRate"] == 16000
+        assert body["rhythm"]["beats"]  # The metronome remains measured.
+        assert body["rhythm"]["neural"]["beats"] == []
+
+
+def test_neural_serialization_empty_and_omitted(settings, auth_headers, tmp_path, monkeypatch):
+    """Completed empty neural output is explicit; unrequested output is omitted."""
+    from dataclasses import replace
+
+    import media_analysis.app as app_module
+    from media_analysis.features.beat_this import outcome
+
+    original = app_module.load_runtime
+
+    class EmptyPredictor:
+        def analyze(self, *args):
+            return outcome("completed")
+
+    monkeypatch.setattr(
+        app_module,
+        "load_runtime",
+        lambda cfg: replace(original(cfg), neural_beats=EmptyPredictor()),
+    )
+    cfg = settings.model_copy(update={"media_analysis_cache_dir": tmp_path / "neural-empty"})
+    data = wav_bytes()
+    with media_server(data) as (url, uploads), TestClient(create_app(cfg)) as client:
+        first = payload(url, data, "audio", ["rhythm"])
+        normal = client.post("/analyze", json=first, headers=auth_headers).json()
+        assert "neural" not in normal["rhythm"]
+        first["idempotencyKey"] = "neural"
+        first["rhythmOptions"] = {"neuralBeats": True}
+        response = client.post("/analyze", json=first, headers=auth_headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["rhythm"]["neural"]["status"] == "completed"
+        assert response.json()["rhythm"]["neural"]["beats"] == []

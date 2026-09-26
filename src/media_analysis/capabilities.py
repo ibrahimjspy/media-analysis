@@ -32,6 +32,7 @@ def configured_features(settings):
 
 def capability_document(settings, runtime):
     from media_analysis.audio_decode import AUDIO_CODECS, AUDIO_DECODE_VERSION
+    from media_analysis.features.beat_this import ALGORITHM, CHECKPOINT_SHA256
     from media_analysis.features.image import FOCUS_VERSION, SALIENCY_VERSION
     from media_analysis.features.rhythm import RHYTHM_VERSION
     from media_analysis.image_decode import IMAGE_DECODE_VERSION, IMAGE_FORMATS
@@ -66,6 +67,20 @@ def capability_document(settings, runtime):
             }
     return {
         "schemaVersion": 1,
+        "neuralBeats": {
+            "implemented": True,
+            "configured": settings.media_analysis_neural_beats_enabled,
+            "warningCodes": [runtime.neural_beats_error] if runtime.neural_beats_error else [],
+            "available": "rhythm" in configured
+            and runtime.ready
+            and runtime.neural_beats is not None,
+            "algorithmVersion": ALGORITHM,
+            "checkpointSha256": CHECKPOINT_SHA256,
+            "mediaKinds": ["audio"],
+            "sampleRate": 22050,
+            "maxDurationSec": settings.media_analysis_neural_beats_max_duration_sec,
+            "productionQualified": False,
+        },
         "mediaKinds": kinds,
         "inputPolicy": {
             "maxBytes": settings.media_analysis_max_bytes,

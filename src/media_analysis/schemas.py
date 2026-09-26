@@ -255,6 +255,7 @@ class ImageOptionsIn(BaseModel):
 
 class RhythmOptionsIn(BaseModel):
     model_config = {"extra": "forbid"}
+    neuralBeats: bool = False
     minBpm: float = Field(default=50, ge=30, le=240)
     maxBpm: float = Field(default=200, ge=40, le=300)
 
@@ -299,6 +300,8 @@ class AnalyzeRequest(BaseModel):
                 raise ValueError("video metadata is invalid for image/audio")
         if self.imageOptions is not None and self.mediaKind != "image":
             raise ValueError("imageOptions requires image kind")
+        if self.rhythmOptions and self.rhythmOptions.neuralBeats and self.mediaKind != "audio":
+            raise ValueError("neuralBeats supports audio sources only")
         if self.rhythmOptions is not None and "rhythm" not in self.features:
             raise ValueError("rhythmOptions requires rhythm")
         if self.mediaKind == "audio" and self.analysisResolution is not None:

@@ -210,6 +210,31 @@ def run_native(
                             cancel_check=guard,
                         )
                         provenance["rhythmVersion"] = RHYTHM_VERSION
+                        if options and options.neuralBeats:
+                            from media_analysis.errors import CANCELLED, TIMEOUT
+                            from media_analysis.features.beat_this import outcome
+
+                            neural = outcome("unavailable", "NEURAL_BEATS_UNAVAILABLE")
+                            if runtime.neural_beats is not None:
+                                try:
+                                    neural = runtime.neural_beats.analyze(
+                                        playback, canonical["durationSec"], guard
+                                    )
+                                except AnalyzeError as exc:
+                                    if exc.code in {CANCELLED, TIMEOUT}:
+                                        raise
+                                    neural = outcome("failed", "NEURAL_BEATS_FAILED")
+                                except Exception:
+                                    neural = outcome("failed", "NEURAL_BEATS_FAILED")
+                            bodies[feature]["neural"] = neural
+                            if neural["status"] != "completed":
+                                warnings.extend(neural["warningCodes"])
+                                capabilities[feature] = {
+                                    "status": "partial",
+                                    "warningCodes": neural["warningCodes"],
+                                }
+                                continue
+
                     capabilities[feature] = {"status": "completed"}
                 except AnalyzeError:
                     raise

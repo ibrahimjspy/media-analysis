@@ -296,3 +296,29 @@ The internal `/analyze` API now accepts native images and standalone audio throu
 `mediaKind`, alongside the existing video contract. See the [contract and caller
 handoff](docs/NATIVE-MEDIA.md) for feature support, format policies, rhythm evidence,
 artifact delivery and verification boundaries. `/capabilities` reports configured support.
+
+
+## Optional Beat This Small soundtrack pilot
+
+Neural beats are default-off and audio-only. Install the `neural-beats` extra
+with matched CPU Torch/torchaudio packages, or layer
+`docker/beat-this-cpu.Dockerfile` onto an analysis-cpu image built from this
+checkout. Vendor weights explicitly with
+`python -m media_analysis.tools.vendor_beat_this /models`; the tool bounds size
+and checks the pinned SHA-256. Runtime never downloads models.
+
+Set `MEDIA_ANALYSIS_NEURAL_BEATS_ENABLED=true` to load/warm one predictor at
+startup. Capabilities advertises `neuralBeats.available` separately from the
+stable algorithm/checkpoint identity. Optional startup failure does not disable
+legacy analysis. The default per-source neural limit is 180 seconds, configurable
+through `MEDIA_ANALYSIS_NEURAL_BEATS_MAX_DURATION_SEC` up to 600 seconds.
+
+Audio requests may send `rhythmOptions.neuralBeats: true` alongside `rhythm`.
+Results add `rhythm.neural`; legacy 16 kHz beats/onsets remain unchanged. The new
+adapter decodes direct playback at mono float32 22,050 Hz. Event times are model
+estimates on a 20 ms grid, not calibrated confidence or sample-accurate onsets.
+Downbeats are diagnostic only. A neural failure yields partial rhythm evidence
+while preserving the legacy branch. Unrequested neural output is omitted.
+
+The backend separately gates pilot requests/anchor selection. No production
+quality qualification or automatic frontend edits are implied by this option.

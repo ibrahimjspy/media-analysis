@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     media_analysis_model_dir: Path = Path("./models")
     media_analysis_image: str = "analysis-cpu"
     media_analysis_worker_role: Literal["combined", "general", "ocr", "audio"] = "combined"
+    # Default-off soundtrack pilot; weights are loaded only during startup.
+    media_analysis_neural_beats_enabled: bool = False
+    media_analysis_neural_beats_max_duration_sec: float = Field(default=180, gt=0, le=600)
     media_analysis_visual_enabled: bool = False
     media_analysis_enabled_features: list[str] | None = None
     media_analysis_max_image_pixels: int = Field(default=40_000_000, gt=0)
