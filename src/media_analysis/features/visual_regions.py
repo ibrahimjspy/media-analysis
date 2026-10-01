@@ -11,7 +11,7 @@ from functools import lru_cache
 
 MODEL = "IDEA-Research/grounding-dino-base"
 REVISION = "12bdfa3120f3e7ec7b434d90674b3396eccf88eb"
-POLICY = "home-tour-visual-1"
+POLICY = "home-tour-visual-2"
 LABELS = (
     "sofa",
     "chair",
@@ -39,6 +39,11 @@ LABELS = (
     "plant",
     "framed picture",
     "staircase",
+    "house facade",
+    "doorway",
+    "room opening",
+    "refrigerator",
+    "kitchen countertop",
 )
 _LOCK = threading.Lock()
 

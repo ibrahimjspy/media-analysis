@@ -113,7 +113,7 @@ def capability_document(settings, runtime):
             "audioDecode": AUDIO_DECODE_VERSION,
             "saliency": SALIENCY_VERSION,
             "focus": FOCUS_VERSION,
-            "visualRegions": "home-tour-visual-1:12bdfa3120f3e7ec7b434d90674b3396eccf88eb",
+            "visualRegions": "home-tour-visual-2:12bdfa3120f3e7ec7b434d90674b3396eccf88eb",
             "rhythm": RHYTHM_VERSION,
         },
         "matte": {

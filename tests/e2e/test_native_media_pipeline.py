@@ -523,12 +523,12 @@ def test_visual_regions_native_boundary(settings, auth_headers, tmp_path, monkey
         visual_regions,
         "detect",
         lambda frame, guard: {
-            "policyVersion": "home-tour-visual-1",
+            "policyVersion": "home-tour-visual-2",
             "modelRevision": "test",
             "regions": [
                 {
                     "id": "region-0",
-                    "label": "sofa",
+                    "label": "room opening",
                     "score": 0.7,
                     "box": {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4},
                 }
@@ -542,6 +542,10 @@ def test_visual_regions_native_boundary(settings, auth_headers, tmp_path, monkey
         result = response.json()
         assert result["capabilities"]["visual_regions"]["status"] == "completed"
         assert result["visual_regions"]["regions"][0]["box"]["x"] == 0.1
+        assert result["visual_regions"]["regions"][0]["label"] == "room opening"
+        assert result["visual_regions"]["policyVersion"] == "home-tour-visual-2"
+        discovery = client.get("/capabilities").json()
+        assert discovery["algorithms"]["visualRegions"].startswith("home-tour-visual-2:")
 
 
 def test_visual_regions_unavailable_is_not_empty_success(

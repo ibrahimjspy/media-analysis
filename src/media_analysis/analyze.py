@@ -601,7 +601,7 @@ def _result_cache_key(
         ),
         *(
             [
-                "home-tour-visual-1:12bdfa3120f3e7ec7b434d90674b3396eccf88eb",
+                "home-tour-visual-2:12bdfa3120f3e7ec7b434d90674b3396eccf88eb",
                 str(settings.media_analysis_visual_enabled),
             ]
             if "visual_regions" in request.features
