@@ -42,9 +42,9 @@ dependencies = [
 media-analysis-vendor-models = "media_analysis.tools.vendor_models:main"
 
 [project.optional-dependencies]
-depth = ["torch==2.7.0", "transformers==4.51.3", "safetensors>=0.4.3,<1"]
+depth = ["torch==2.7.0", "transformers==5.10.1", "safetensors>=0.4.3,<1"]
 neural-beats = ["beat-this==1.1.0", "torch==2.7.0", "torchaudio==2.7.0"]
-visual = ["torch==2.7.0", "transformers==4.51.3"]
+visual = ["torch==2.7.0", "transformers==5.10.1"]
 dev = [
   "pytest>=8.3,<9",
   "pytest-cov>=6.0,<7",
