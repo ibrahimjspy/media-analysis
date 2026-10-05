@@ -584,11 +584,22 @@ def _result_cache_key(
         f"{entry.name}:{entry.sha256}"
         for entry in sorted(runtime.manifest.entries, key=lambda item: item.name)
     )
+    from media_analysis.features.depth import RECIPE as DEPTH_RECIPE
+
     return LocalMediaCache.stable_key(
         media_fingerprint,
         request_hash(request.model_dump(mode="python", by_alias=True)),
         __version__,
         "analysis-cache-v3",
+        *(
+            [
+                DEPTH_RECIPE,
+                str(settings.media_analysis_depth_enabled),
+                str(runtime.depth is not None),
+            ]
+            if "relative_depth" in request.features
+            else []
+        ),
         *(
             [
                 "beat-this-small0-v1:6074be2c4d490c5f6101fcc374a1ec72ae93456e23bb6019783b849f5dc7d47b:mono22050-f32-playback-v1:dbn-false",

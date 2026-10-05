@@ -22,6 +22,7 @@ CPU_FEATURES = frozenset(
         "focus",
         "saliency",
         "visual_regions",
+        "relative_depth",
         "rhythm",
     }
 )
@@ -40,10 +41,11 @@ IMAGE_FEATURES = frozenset(
         "focus",
         "saliency",
         "visual_regions",
+        "relative_depth",
     }
 )
 AUDIO_FEATURES = frozenset({"audio", "waveform", "rhythm"})
-VIDEO_FEATURES = ALL_FEATURES - {"focus", "saliency", "visual_regions"}
+VIDEO_FEATURES = ALL_FEATURES - {"focus", "saliency", "visual_regions", "relative_depth"}
 FEATURES_BY_KIND = {"image": IMAGE_FEATURES, "audio": AUDIO_FEATURES, "video": VIDEO_FEATURES}
 # 1920x1920 at 30 fps for the default 60s duration envelope.
 DEFAULT_MAX_DECODED_PIXELS = 1920 * 1920 * 1800
@@ -66,6 +68,8 @@ class Settings(BaseSettings):
     media_analysis_neural_beats_enabled: bool = False
     media_analysis_neural_beats_max_duration_sec: float = Field(default=180, gt=0, le=600)
     media_analysis_visual_enabled: bool = False
+    # Optional local model, loaded once at startup; existing processing stays usable.
+    media_analysis_depth_enabled: bool = False
     media_analysis_enabled_features: list[str] | None = None
     media_analysis_max_image_pixels: int = Field(default=40_000_000, gt=0)
     media_analysis_image_max_dimension: int = Field(default=1280, ge=64, le=4096)

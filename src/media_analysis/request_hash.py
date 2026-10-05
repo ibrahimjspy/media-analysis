@@ -21,7 +21,7 @@ def _normalize_output_grants(grants: dict[str, Any] | None) -> dict[str, Any] | 
     stable: dict[str, Any] = {}
     if grants.get("canonicalMp4"):
         stable["canonicalMp4"] = True
-    for role in ("canonicalImage", "canonicalAudio"):
+    for role in ("canonicalImage", "canonicalAudio", "depthMap"):
         if grants.get(role):
             stable[role] = True
     thumbnails = grants.get("thumbnails")

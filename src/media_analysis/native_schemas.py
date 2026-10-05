@@ -272,6 +272,7 @@ class ImageResult(NativeEnvelope):
     saliency: Saliency | None = None
     focus: Focus | None = None
     visual_regions: dict[str, Any] | None = None
+    relative_depth: dict[str, Any] | None = None
     thumbnails: list[ImageThumbnail] | None = None
 
 

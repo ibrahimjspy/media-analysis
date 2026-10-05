@@ -76,3 +76,11 @@ Robust Video Matting (RVM) is a quality-reference model under GPL-3.0.
 It is not vendored in this repository unless a documented legal approval
 is added. Do not add Ultralytics YOLO weights or code: those are AGPL-3.0
 and are incompatible with this project's Apache-2.0 default.
+
+  Optional Depth Anything V2 Small HF model
+  Upstream: https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf
+  Revision: 5426e4f0f36572d16453bbda7a8389317b1bef99
+  Authors: Depth Anything V2 contributors (HKU and TikTok)
+  Small weights and upstream code: Apache License 2.0.
+  Only the Small checkpoint is included by the optional depth vendor tool.
+  Other checkpoint sizes may have different licenses and are not substituted.

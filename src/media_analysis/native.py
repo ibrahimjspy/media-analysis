@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 from typing import Any
@@ -108,6 +109,19 @@ def run_native(
         provenance["audioDecodeVersion"] = AUDIO_DECODE_VERSION
         provenance["pcmExtractionVersion"] = PCM_EXTRACTION_VERSION
     canonical["sourceSha256"] = fingerprint
+    if cached is not None and "relative_depth" in request.features:
+        from media_analysis.features.depth import cached_payload, validate_depth_image
+
+        try:
+            validate_depth_image(prepared_image.canonical)
+            cached_payload(
+                cached["relative_depth"],
+                hashlib.sha256(prepared_image.png()).hexdigest(),
+                prepared_image.canonical.width,
+                prepared_image.canonical.height,
+            )
+        except (KeyError, TypeError, ValueError):
+            cached = None  # Recompute corrupted or incorrectly paired depth cache.
     if cached is not None:
         bodies = {k: v for k, v in cached.items() if k in request.features}
         capabilities = cached["capabilities"]
@@ -140,6 +154,26 @@ def run_native(
                                 continue
                             bodies[feature] = {
                                 "regions": image_features.regions(feature, bgr, runtime)
+                            }
+                        elif feature == "relative_depth":
+                            if runtime.depth is None or not settings.media_analysis_depth_enabled:
+                                capabilities[feature] = {
+                                    "status": "unavailable",
+                                    "warningCodes": ["DEPTH_MODEL_UNAVAILABLE"],
+                                }
+                                warnings.append("DEPTH_MODEL_UNAVAILABLE")
+                                continue
+                            payload, metadata = runtime.depth.analyze(
+                                prepared_image.canonical, guard
+                            )
+                            metadata["canonicalSha256"] = hashlib.sha256(
+                                prepared_image.png()
+                            ).hexdigest()
+                            # Private cache bytes survive grant renewal.
+                            # They never enter public result JSON.
+                            bodies[feature] = {
+                                **metadata,
+                                "_encoded": base64.b64encode(payload).decode("ascii"),
                             }
                         elif feature == "visual_regions":
                             from media_analysis.features.visual_regions import available, detect
@@ -238,12 +272,19 @@ def run_native(
                     capabilities[feature] = {"status": "completed"}
                 except AnalyzeError:
                     raise
-                except Exception:
+                except Exception as error:
+                    warning = f"{feature.upper()}_FAILED"
+                    if feature == "relative_depth" and isinstance(error, ValueError):
+                        from media_analysis.features.depth import ANALYSIS_WARNING_CODES
+
+                        # Expose only code-owned failures, never arbitrary model text.
+                        if str(error) in ANALYSIS_WARNING_CODES:
+                            warning = str(error)
                     bodies.pop(feature, None)
-                    warnings.append(f"{feature.upper()}_FAILED")
+                    warnings.append(warning)
                     capabilities[feature] = {
                         "status": "failed",
-                        "warningCodes": [f"{feature.upper()}_FAILED"],
+                        "warningCodes": [warning],
                     }
     statuses = {item["status"] for item in capabilities.values()}
     overall = (
@@ -301,6 +342,31 @@ def run_native(
             ]
     elif grants and grants.canonicalAudio:
         canonical.update(deliver(playback.read_bytes(), grants.canonicalAudio, "audio/wav"))
+    if "relative_depth" in request.features and result.get("relative_depth"):
+        depth = result["relative_depth"]
+        encoded = depth.pop("_encoded", None)
+        try:
+            payload = base64.b64decode(encoded, validate=True)
+            if (
+                len(payload) != depth["byteCount"]
+                or hashlib.sha256(payload).hexdigest() != depth["sha256"]
+            ):
+                raise ValueError("DEPTH_CACHE_CORRUPT")
+            depth.update(deliver(payload, grants.depthMap, "application/octet-stream"))
+        except Exception as error:
+            if isinstance(error, AnalyzeError) and error.code in {"CANCELLED", "TIMEOUT"}:
+                raise
+            result.pop("relative_depth", None)
+            result["capabilities"]["relative_depth"] = {
+                "status": "failed",
+                "warningCodes": ["DEPTH_DELIVERY_FAILED"],
+            }
+            result["warningCodes"] = sorted(set([*result["warningCodes"], "DEPTH_DELIVERY_FAILED"]))
+            result["overallStatus"] = (
+                "partial"
+                if any(c["status"] == "completed" for c in result["capabilities"].values())
+                else "failed"
+            )
     result["telemetry"] = {
         **telemetry.as_dict(),
         "mediaKind": request.mediaKind,

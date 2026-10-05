@@ -33,6 +33,7 @@ def configured_features(settings):
 def capability_document(settings, runtime):
     from media_analysis.audio_decode import AUDIO_CODECS, AUDIO_DECODE_VERSION
     from media_analysis.features.beat_this import ALGORITHM, CHECKPOINT_SHA256
+    from media_analysis.features.depth import MAX_DIMENSION, RECIPE
     from media_analysis.features.image import FOCUS_VERSION, SALIENCY_VERSION
     from media_analysis.features.rhythm import RHYTHM_VERSION
     from media_analysis.image_decode import IMAGE_DECODE_VERSION, IMAGE_FORMATS
@@ -51,6 +52,8 @@ def capability_document(settings, runtime):
                     "ocr": "ocr_session",
                 }.get(feature)
                 model_ready = attribute is not None and getattr(runtime, attribute) is not None
+            if feature == "relative_depth":
+                model_ready = settings.media_analysis_depth_enabled and runtime.depth is not None
             if feature == "visual_regions":
                 from media_analysis.features.visual_regions import available
 
@@ -67,6 +70,18 @@ def capability_document(settings, runtime):
             }
     return {
         "schemaVersion": 1,
+        "depth": {
+            "available": "relative_depth" in configured
+            and runtime.ready
+            and runtime.depth is not None,
+            "configured": settings.media_analysis_depth_enabled,
+            "recipe": RECIPE,
+            "maxMapDimension": MAX_DIMENSION,
+            "encoding": "uint16le_inverse_relative",
+            "mediaKinds": ["image"],
+            "productionQualified": False,
+            "warningCodes": [runtime.depth_error] if runtime.depth_error else [],
+        },
         "neuralBeats": {
             "implemented": True,
             "configured": settings.media_analysis_neural_beats_enabled,

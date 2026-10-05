@@ -24,6 +24,7 @@ FeatureName = Literal[
     "person_matte",
     "focus",
     "visual_regions",
+    "relative_depth",
     "saliency",
     "rhythm",
 ]
@@ -100,6 +101,7 @@ class MatteAssetOutputGrantIn(SignedPutGrantIn):
 class OutputGrantsIn(BaseModel):
     canonicalMp4: SignedPutGrantIn | None = None
     canonicalImage: SignedPutGrantIn | None = None
+    depthMap: SignedPutGrantIn | None = None
     canonicalAudio: SignedPutGrantIn | None = None
     thumbnails: list[ThumbnailOutputGrantIn] | None = None
     matteAssets: list[MatteAssetOutputGrantIn] | None = None
@@ -307,6 +309,18 @@ class AnalyzeRequest(BaseModel):
         if self.mediaKind == "audio" and self.analysisResolution is not None:
             raise ValueError("audio has no image resolution")
         grants = self.outputGrants
+        if "relative_depth" in self.features:
+            if (
+                self.mediaKind != "image"
+                or not self.canonicalize
+                or not grants
+                or not grants.depthMap
+            ):
+                raise ValueError(
+                    "relative_depth requires image canonicalization and depthMap output grant"
+                )
+        elif grants and grants.depthMap:
+            raise ValueError("depthMap requires relative_depth")
         if grants:
             for role, kind in (
                 ("canonicalMp4", "video"),

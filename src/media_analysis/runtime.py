@@ -52,6 +52,8 @@ class RuntimeState:
     initialization_ms: int = 0
     neural_beats: Any | None = None
     neural_beats_error: str | None = None
+    depth: Any | None = None
+    depth_error: str | None = None
 
 
 def _model_path(settings: Settings, manifest: ManifestState, name: str) -> Path:
@@ -119,6 +121,15 @@ def load_runtime(settings: Settings) -> RuntimeState:
             state = replace(state, neural_beats=predictor)
         except Exception:
             state = replace(state, neural_beats_error="NEURAL_BEATS_UNAVAILABLE")
+    if settings.media_analysis_depth_enabled and settings.worker_role in {"combined", "general"}:
+        try:
+            from media_analysis.features.depth import DepthAnalyzer
+
+            state = replace(
+                state, depth=DepthAnalyzer.load(settings.media_analysis_model_dir / "depth-v1")
+            )
+        except Exception:
+            state = replace(state, depth_error="DEPTH_MODEL_UNAVAILABLE")
     return replace(state, initialization_ms=max(0, int((time.perf_counter() - started) * 1000)))
 
 
