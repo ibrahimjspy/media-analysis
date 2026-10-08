@@ -120,3 +120,48 @@ def test_cache_binds_grid_geometry_to_freshly_decoded_canonical_dimensions():
     _, metadata = cache_entry()
     with pytest.raises(ValueError, match="^DEPTH_CACHE_INVALID$"):
         cached_payload(metadata, "a" * 64, 32, 64)
+
+
+def test_feature_cache_invalidates_changed_pixels_recipe_and_corruption(tmp_path, monkeypatch):
+    """A fast cache hit cannot turn a different image or bad samples into evidence."""
+    import io
+
+    import media_analysis.features.depth as depth
+    from media_analysis.cache import LocalMediaCache
+
+    image = Image.fromarray(np.tile(np.arange(64, dtype=np.uint8), (32, 1))).convert("RGB")
+    target = io.BytesIO()
+    image.save(target, format="PNG")
+    png = target.getvalue()
+    cache = LocalMediaCache(tmp_path, max_bytes=8 * 1024 * 1024, ttl_sec=3600)
+    predictor = Mock()
+    predictor.analyze.side_effect = lambda img, guard: encode_depth(
+        np.arange(32, dtype=np.float32).reshape(4, 8), *img.size
+    )
+    guard = Mock()
+    first, hit = depth.reusable_depth(image, png, predictor, guard, cache)
+    assert not hit
+    second, hit = depth.reusable_depth(image, png, predictor, guard, cache)
+    assert hit and second == first and predictor.analyze.call_count == 1
+
+    key = cache.stable_key("depth-feature-v1", hashlib.sha256(png).hexdigest(), depth.RECIPE)
+    cache.put_json("image-depth", key, {**first, "_encoded": "broken"})
+    _, hit = depth.reusable_depth(image, png, predictor, guard, cache)
+    assert not hit and predictor.analyze.call_count == 2
+    monkeypatch.setattr(depth, "RECIPE", depth.RECIPE + ":changed")
+    _, hit = depth.reusable_depth(image, png, predictor, guard, cache)
+    assert not hit and predictor.analyze.call_count == 3
+    image.putpixel((0, 0), (240, 10, 30))
+    target = io.BytesIO()
+    image.save(target, format="PNG")
+    _, hit = depth.reusable_depth(image, target.getvalue(), predictor, guard, cache)
+    assert not hit and predictor.analyze.call_count == 4
+    with pytest.raises(RuntimeError, match="cancelled"):
+        depth.reusable_depth(
+            image,
+            target.getvalue(),
+            predictor,
+            lambda: (_ for _ in ()).throw(RuntimeError("cancelled")),
+            cache,
+        )
+    assert predictor.analyze.call_count == 4

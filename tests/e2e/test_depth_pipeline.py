@@ -192,7 +192,13 @@ def test_uniform_photo_keeps_canonical_image_without_invented_depth(
             },
         )
         if seed_legacy_cache:
-            first = client.post("/analyze", json=body, headers=auth_headers)
+            # Seed the historical pre-guard behavior, then restore the current
+            # variation check before testing reuse of those old samples.
+            with monkeypatch.context() as legacy:
+                legacy.setattr(
+                    "media_analysis.features.depth.validate_depth_image", lambda image: None
+                )
+                first = client.post("/analyze", json=body, headers=auth_headers)
             assert first.status_code == 200, first.text
             assert first.json()["capabilities"]["relative_depth"]["status"] == "completed"
             assert predictor.calls == 1
@@ -319,3 +325,60 @@ def test_depth_cancellation_propagates_but_unknown_errors_are_sanitized(
             assert "private-provider-body-and-url" not in response.text
             assert result["canonicalMedia"]["sha256"]
         assert uploads == []
+
+
+@pytest.mark.parametrize("extra_feature", ["exposure", "ocr"])
+def test_extra_measurement_reuses_identical_depth(
+    settings, auth_headers, tmp_path, monkeypatch, extra_feature
+):
+    """Changing the feature set misses the whole-result cache, not depth samples.
+
+    Actual HTTP, decoding, hashing, sample validation, cache storage and renewed
+    uploads run here. Only the expensive predictor is replaced with a counted
+    deterministic implementation; this test makes no inference-speed claim.
+    """
+    import media_analysis.app as app_module
+
+    original = app_module.load_runtime
+    predictor = Predictor()
+    monkeypatch.setattr(
+        app_module,
+        "load_runtime",
+        lambda cfg: replace(
+            original(cfg.model_copy(update={"media_analysis_depth_enabled": False})),
+            depth=predictor,
+        ),
+    )
+    cfg = settings.model_copy(
+        update={
+            "media_analysis_depth_enabled": True,
+            "media_analysis_cache_dir": tmp_path / "cache",
+        }
+    )
+    data = png_bytes()
+    with media_server(data) as (url, uploads), TestClient(create_app(cfg)) as client:
+        body = payload(
+            url,
+            data,
+            "image",
+            ["quality", "relative_depth"],
+            canonicalize=True,
+            outputGrants={
+                "depthMap": {"signedPutUrl": url + "/first", "expiresAt": "2099-01-01T00:00:00Z"}
+            },
+        )
+        first = client.post("/analyze", json=body, headers=auth_headers)
+        assert first.status_code == 200
+        first_bytes = uploads[-1][1]
+        body["idempotencyKey"] = "add-feature"
+        body["features"].append(extra_feature)
+        body["outputGrants"]["depthMap"]["signedPutUrl"] = url + "/second"
+        second = client.post("/analyze", json=body, headers=auth_headers)
+        assert second.status_code == 200, second.text
+        assert not second.json()["telemetry"]["resultCacheHit"]
+        assert second.json()["telemetry"]["depthFeatureCacheHit"]
+        assert predictor.calls == 1
+        assert uploads[-1][0] == "/second"
+        assert uploads[-1][1] == first_bytes
+        assert second.json()["relative_depth"] == first.json()["relative_depth"]
+        assert "_encoded" not in str(second.json())

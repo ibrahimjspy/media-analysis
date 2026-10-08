@@ -109,6 +109,7 @@ def run_native(
         provenance["audioDecodeVersion"] = AUDIO_DECODE_VERSION
         provenance["pcmExtractionVersion"] = PCM_EXTRACTION_VERSION
     canonical["sourceSha256"] = fingerprint
+    depth_cache_corrupt = False
     if cached is not None and "relative_depth" in request.features:
         from media_analysis.features.depth import cached_payload, validate_depth_image
 
@@ -122,6 +123,7 @@ def run_native(
             )
         except (KeyError, TypeError, ValueError):
             cached = None  # Recompute corrupted or incorrectly paired depth cache.
+            depth_cache_corrupt = True
     if cached is not None:
         bodies = {k: v for k, v in cached.items() if k in request.features}
         capabilities = cached["capabilities"]
@@ -163,18 +165,17 @@ def run_native(
                                 }
                                 warnings.append("DEPTH_MODEL_UNAVAILABLE")
                                 continue
-                            payload, metadata = runtime.depth.analyze(
-                                prepared_image.canonical, guard
+                            from media_analysis.features.depth import reusable_depth
+
+                            bodies[feature], reused = reusable_depth(
+                                prepared_image.canonical,
+                                prepared_image.png(),
+                                runtime.depth,
+                                guard,
+                                media_cache,
+                                allow_reuse=not depth_cache_corrupt,
                             )
-                            metadata["canonicalSha256"] = hashlib.sha256(
-                                prepared_image.png()
-                            ).hexdigest()
-                            # Private cache bytes survive grant renewal.
-                            # They never enter public result JSON.
-                            bodies[feature] = {
-                                **metadata,
-                                "_encoded": base64.b64encode(payload).decode("ascii"),
-                            }
+                            telemetry.depth_feature_cache_hit = reused
                         elif feature == "visual_regions":
                             from media_analysis.features.visual_regions import available, detect
 

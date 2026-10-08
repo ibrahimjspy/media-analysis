@@ -275,3 +275,42 @@ def cached_payload(
     if values.min() != 0 or values.max() != 65535:
         raise ValueError("DEPTH_CACHE_INVALID")
     return data
+
+
+def reusable_depth(image, canonical_png, analyzer, guard, cache, *, allow_reuse=True):
+    """Reuse verified depth independently of unrelated requested features.
+
+    The key binds exact canonical PNG bytes and the pinned model/encoding recipe.
+    A fresh request still checks feature availability in its caller, validates
+    image variation and runs the cancellation/deadline guard. Cached samples and
+    metadata are fully validated before reuse; corrupt entries are recomputed.
+    The existing worker analysis gate serializes inference and cache publication.
+
+    Returns the private encoded depth body and a cache-hit boolean. Delivery
+    grants and source/workspace identities never enter this content-only cache;
+    each authorized request uploads its own artifact through the normal path.
+    Failures are not cached. Storage shares the existing bounded TTL/LRU cache.
+    """
+    guard()
+    validate_depth_image(image)
+    canonical_sha = hashlib.sha256(canonical_png).hexdigest()
+    key = cache.stable_key("depth-feature-v1", canonical_sha, RECIPE)
+    cached = cache.get_json("image-depth", key) if allow_reuse else None
+    if cached is not None:
+        try:
+            cached_payload(cached, canonical_sha, *image.size)
+        except (KeyError, TypeError, ValueError):
+            cached = None
+        else:
+            guard()
+            return cached, True
+    payload, metadata = analyzer.analyze(image, guard)
+    body = {
+        **metadata,
+        "canonicalSha256": canonical_sha,
+        "_encoded": base64.b64encode(payload).decode("ascii"),
+    }
+    cached_payload(body, canonical_sha, *image.size)
+    guard()
+    cache.put_json("image-depth", key, body)
+    return body, False

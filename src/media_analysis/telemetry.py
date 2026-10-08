@@ -72,6 +72,8 @@ class JobTelemetry:
     source_cache_hit: bool = False
     canonical_cache_hit: bool = False
     result_cache_hit: bool = False
+    # Depth may reuse samples even when another requested feature changes.
+    depth_feature_cache_hit: bool = False
     unique_frames_decoded: int = 0
     frame_cache_hits: int = 0
     frame_disk_hits: int = 0
@@ -120,6 +122,7 @@ class JobTelemetry:
             "sourceCacheHit": self.source_cache_hit,
             "canonicalCacheHit": self.canonical_cache_hit,
             "resultCacheHit": self.result_cache_hit,
+            "depthFeatureCacheHit": self.depth_feature_cache_hit,
             "uniqueSampledFramesDecoded": self.unique_frames_decoded,
             "frameCacheHits": self.frame_cache_hits,
             "frameDiskCacheHits": self.frame_disk_hits,

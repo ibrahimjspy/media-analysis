@@ -322,3 +322,22 @@ while preserving the legacy branch. Unrequested neural output is omitted.
 
 The backend separately gates pilot requests/anchor selection. No production
 quality qualification or automatic frontend edits are implied by this option.
+
+### Depth reuse when requested measurements change
+
+The native image path keeps an independent `image-depth` entry in the existing
+bounded local cache. Adding OCR/exposure to a request can reuse depth samples for
+the exact canonical image and pinned recipe while running the other requested
+measurements. `telemetry.depthFeatureCacheHit` distinguishes that reuse from a
+whole-result cache hit. This does not skip image decoding, canonical upload or
+new measurements, and it does not change depth quality or suitability guarantees.
+
+Entries contain private encoded samples, never delivery grants. Every reuse
+validates image identity, recipe, dimensions, sample digest and numeric metadata.
+Corruption recomputes; missing models and failed inference are never promoted to
+successful evidence. The existing analysis gate, TTL and eviction policy remain.
+
+`scripts/benchmark_depth_reuse.py --model <pinned-local-folder> --report <json>
+<canonical.png> ...` compares real inference against validated reuse with temporary
+cache storage. Install the pinned depth dependencies first; the script never
+fetches model files. It measures the depth component, not full HTTP/tour latency.
