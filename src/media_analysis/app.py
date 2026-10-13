@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 import threading
-from contextlib import asynccontextmanager
+import time
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
 from fastapi import FastAPI, Header, Request
@@ -11,7 +13,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from media_analysis import __version__
-from media_analysis.analyze import run_analyze, validate_analyze_request
+from media_analysis.analyze import (
+    _check_job,
+    prepare_analysis_source,
+    run_analyze,
+    validate_analyze_request,
+    validate_analyze_runtime,
+)
 from media_analysis.capabilities import capability_document
 from media_analysis.config import Settings, get_settings
 from media_analysis.errors import (
@@ -30,7 +38,8 @@ from media_analysis.telemetry import stage_latency_metrics
 
 _manifest: ManifestState | None = None
 _runtime: RuntimeState | None = None
-logger = logging.getLogger(__name__)
+# Inherit Uvicorn's INFO handler so pipeline timings are visible in worker logs.
+logger = logging.getLogger("uvicorn.error.media_analysis")
 
 
 def current_manifest(settings: Settings | None = None) -> ManifestState:
@@ -57,6 +66,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         get_settings.cache_clear()
     cfg = settings or get_settings()
     analysis_gate = threading.Lock()
+    # Two job-owned sources maximum: one in analysis and one preparing/waiting.
+    # Decoding, model inference and output delivery retain the original serial gate.
+    pipeline_slots = threading.BoundedSemaphore(2)
+
+    @contextmanager
+    def admission(gate, job, deadline, stage):
+        """Wait without blocking cancellation; record queue time separately."""
+        started = time.monotonic()
+        while not gate.acquire(timeout=0.1):
+            _check_job(job, deadline)
+        try:
+            _check_job(job, deadline)
+            waited_ms = int((time.monotonic() - started) * 1000)
+            yield waited_ms
+        finally:
+            gate.release()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -135,10 +160,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise AnalyzeError(INVALID_REQUEST, str(exc)) from exc
         if cached is not None:
             return cached
+        started = time.monotonic()
+        pipeline_stage = "validation"
         try:
-            with analysis_gate:
-                result = run_analyze(payload, settings=cfg, runtime=state, job=job)
-        except AnalyzeError:
+            validate_analyze_runtime(payload, cfg, state)
+            pipeline_stage = "admission_wait"
+            deadline = started + cfg.media_analysis_job_timeout_sec
+            with admission(pipeline_slots, job, deadline, "admission_wait") as admission_ms:
+                pipeline_stage = "prefetch"
+                preparation_started = time.monotonic()
+                with prepare_analysis_source(
+                    payload, settings=cfg, job=job, deadline=deadline
+                ) as prepared:
+                    preparation_seconds = time.monotonic() - preparation_started
+                    prepared.telemetry.record_stage("admission_wait", admission_ms)
+                    pipeline_stage = "inference_wait"
+                    with admission(analysis_gate, job, deadline, "inference_wait") as inference_ms:
+                        pipeline_stage = "analysis"
+                        prepared.telemetry.record_stage("inference_wait", inference_ms)
+                        result = run_analyze(
+                            payload,
+                            settings=cfg,
+                            runtime=state,
+                            job=job,
+                            prepared=prepared,
+                            analysis_deadline=time.monotonic()
+                            + max(0, cfg.media_analysis_job_timeout_sec - preparation_seconds),
+                        )
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "media_analysis.pipeline.completed",
+                        "idempotency_key": payload.idempotencyKey,
+                        "elapsed_ms": int((time.monotonic() - started) * 1000),
+                        "admission_wait_ms": admission_ms,
+                        "inference_wait_ms": inference_ms,
+                    }
+                )
+            )
+        except AnalyzeError as exc:
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "media_analysis.pipeline.failed",
+                        "idempotency_key": payload.idempotencyKey,
+                        "stage": pipeline_stage,
+                        "code": exc.code,
+                        "elapsed_ms": int((time.monotonic() - started) * 1000),
+                    }
+                )
+            )
             registry.fail(job)
             raise
         except Exception as exc:

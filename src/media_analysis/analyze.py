@@ -6,6 +6,7 @@ import time
 from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -349,27 +350,42 @@ def _matte_target_dict(request: AnalyzeRequest) -> dict[str, Any] | None:
     return request.matteTarget.model_dump(mode="python", by_alias=True)
 
 
-def run_analyze(
+@dataclass(frozen=True)
+class PreparedAnalysisSource:
+    """Job-owned source bytes; only network/cache I/O occurs before inference.
+
+    The temporary directory lives until analysis and uploads finish. Checked-out
+    cache files cannot be evicted underneath this job. The same deadline and
+    telemetry follow the bytes through the serialized decode/inference stage.
+    """
+
+    directory: Path
+    source: Path
+    fingerprint: str
+    deadline: float
+    telemetry: JobTelemetry
+    cache: LocalMediaCache
+
+
+@contextmanager
+def prepare_analysis_source(
     request: AnalyzeRequest,
     *,
     settings: Settings,
-    runtime: RuntimeState,
     job: Job,
-) -> dict[str, Any]:
-    if not runtime.ready:
-        raise AnalyzeError(MODEL_NOT_READY, "Required models are not loaded")
-    validate_analyze_request(request, settings)
-    if (
-        request.mediaKind == "video"
-        and "audio" in request.features
-        and settings.media_analysis_image == "analysis-cpu"
-    ):
-        if not _audio_vad_available(runtime, runtime.manifest, settings):
-            raise AnalyzeError(
-                FEATURE_UNAVAILABLE,
-                "Silero VAD is not available for audio analysis",
-            )
-    deadline = time.monotonic() + settings.media_analysis_job_timeout_sec
+    deadline: float | None = None,
+) -> Iterator[PreparedAnalysisSource]:
+    """Fetch or check out verified source bytes without allocating decoded frames.
+
+    All existing expiry, host, byte-limit, checksum and cancellation rules apply.
+    The caller must bound concurrent contexts because each may hold a full source
+    on disk. Closing the context removes its private files on every failure path.
+    """
+    deadline = (
+        deadline
+        if deadline is not None
+        else time.monotonic() + settings.media_analysis_job_timeout_sec
+    )
     telemetry = JobTelemetry()
     _check_job(job, deadline)
     stage_budget = settings.media_analysis_stage_timeout_sec
@@ -426,6 +442,55 @@ def run_analyze(
                         src,
                         suffix=".media",
                     )
+        yield PreparedAnalysisSource(Path(tmp), src, fingerprint, deadline, telemetry, media_cache)
+
+
+def validate_analyze_runtime(
+    request: AnalyzeRequest, settings: Settings, runtime: RuntimeState
+) -> None:
+    """Reject unavailable model dependencies before performing any source I/O."""
+    if not runtime.ready:
+        raise AnalyzeError(MODEL_NOT_READY, "Required models are not loaded")
+    validate_analyze_request(request, settings)
+    if (
+        request.mediaKind == "video"
+        and "audio" in request.features
+        and settings.media_analysis_image == "analysis-cpu"
+    ):
+        if not _audio_vad_available(runtime, runtime.manifest, settings):
+            raise AnalyzeError(
+                FEATURE_UNAVAILABLE,
+                "Silero VAD is not available for audio analysis",
+            )
+
+
+def run_analyze(
+    request: AnalyzeRequest,
+    *,
+    settings: Settings,
+    runtime: RuntimeState,
+    job: Job,
+    prepared: PreparedAnalysisSource | None = None,
+    analysis_deadline: float | None = None,
+) -> dict[str, Any]:
+    validate_analyze_runtime(request, settings, runtime)
+    with (
+        prepare_analysis_source(request, settings=settings, job=job)
+        if prepared is None
+        else nullcontext(prepared)
+    ) as source_input:
+        # Time waiting for the model gate is not model execution time. The app
+        # separately bounds admission and deducts source preparation from the
+        # original analysis budget; no inference deadline is relaxed.
+        deadline = analysis_deadline if analysis_deadline is not None else source_input.deadline
+        _check_job(job, deadline)
+        telemetry = source_input.telemetry
+        stage_budget = settings.media_analysis_stage_timeout_sec
+        media_cache = source_input.cache
+        declared_fingerprint = request.source.sha256.lower() if request.source.sha256 else None
+        tmp = source_input.directory
+        src = source_input.source
+        fingerprint = source_input.fingerprint
         if request.mediaKind != "video":
             from media_analysis.native import run_native
 
