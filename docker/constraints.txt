@@ -3,5 +3,5 @@
 opencv-python-headless==4.10.0.84
 
 # Canonical still-image codec/color implementation used in contract fixtures.
-Pillow==12.3.0
+Pillow==13.0.0
 pillow-heif==1.7.0
